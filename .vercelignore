@@ -1,0 +1,16 @@
+.venv/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+frontend/node_modules/
+frontend/e2e/
+backend/tests/
+backend/scripts/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+.env
+.env.local
+frontend/playwright-report/
+frontend/test-results/

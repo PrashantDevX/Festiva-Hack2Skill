@@ -79,7 +79,7 @@ def test_health_reports_demo_mode_without_claiming_live_provider(client):
         "status": "ok",
         "ai_mode": "demo",
         "provider": "google-gemini",
-        "model": "gemini-3.8-flash",
+        "model": "gemini-3.5-flash-lite",
         "provider_configured": False,
     }
 
@@ -121,6 +121,7 @@ def test_diagnostics_are_aggregate_and_never_include_the_key(
     assert payload["status"] == "ok"
     assert payload["ai"]["provider"] == "google-gemini"
     assert payload["ai"]["provider_configured"] is True
+    assert payload["database"]["backend"] == "sqlite"
     assert payload["database"]["plans"] == 1
     assert payload["cache"]["generation_entries"] == 0
     assert "generations" in payload["metrics"]

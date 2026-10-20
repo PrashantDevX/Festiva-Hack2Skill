@@ -2,6 +2,7 @@ import json
 
 import pytest
 from google.genai import errors
+from pydantic import ValidationError
 
 from app import ai
 from app.ai import AIServiceError
@@ -362,15 +363,82 @@ def test_provider_schema_avoids_unsupported_json_schema_keywords():
             '"pattern"',
             "exclusiveMinimum",
             "exclusiveMaximum",
+            '"minItems"',
+            '"maxItems"',
         ):
             assert keyword not in serialized, keyword
         assert schema["type"] == "object"
         assert "additionalProperties" not in schema
 
+    plan_schema = ai._output_schema(AIPlanContent)
+    prep_task = plan_schema["properties"]["prep_tasks"]["items"]
+    assert prep_task["required"] == ["title"]
+    assert "title" in prep_task["properties"]
+
     revision = ai._output_schema(RevisionOutput)
     event_fields = revision["properties"]["event"]
     assert event_fields["properties"]["event_date"]["type"] == "string"
     assert "event_date" not in event_fields["required"]
+
+
+def test_array_bounds_are_enforced_locally_even_though_the_provider_hint_omits_them(
+    valid_event, demo_ai_payload
+):
+    payload = json.loads(demo_ai_payload(EventInput.model_validate(valid_event)))
+    payload["expenses"] = []
+    with pytest.raises(ValidationError):
+        AIPlanContent.model_validate(payload)
+
+
+def test_interactions_sdk_status_code_errors_are_mapped_without_leaking_details():
+    class InteractionError(Exception):
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            super().__init__("sensitive provider internals")
+
+    quota = ai._map_api_error(InteractionError(429, {"Retry-After": "7"}))
+    assert quota is not None
+    assert quota.category == "quota"
+    assert quota.http_status == 429
+    assert quota.retry_after == 7
+    assert "sensitive provider internals" not in str(quota)
+
+    bad_request = ai._map_api_error(InteractionError(400))
+    assert bad_request is not None
+    assert bad_request.category == "request"
+    assert "sensitive provider internals" not in str(bad_request)
+
+    assert ai._map_api_error(RuntimeError("not an API error")) is None
+
+
+def test_interactions_sdk_400_is_not_retried_and_is_safely_reported(monkeypatch, live_env):
+    calls = []
+
+    class InteractionError(Exception):
+        status_code = 400
+        headers = {}
+
+        def __init__(self):
+            super().__init__("sensitive provider internals")
+
+    class FakeInteractions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            raise InteractionError()
+
+    class FakeClient:
+        interactions = FakeInteractions()
+
+    monkeypatch.setattr(ai, "_get_client", lambda: FakeClient())
+
+    with pytest.raises(AIServiceError) as error:
+        ai._provider_completion("system", "user", {"type": "object"})
+
+    assert error.value.category == "request"
+    assert error.value.http_status == 503
+    assert "sensitive provider internals" not in str(error.value)
+    assert len(calls) == 1
 
 
 def test_provider_request_uses_structured_output_and_records_usage(
@@ -419,7 +487,7 @@ def test_provider_request_uses_structured_output_and_records_usage(
     assert snapshot["output_tokens"] == 340
     assert snapshot["thought_tokens"] == 12
     assert snapshot["total_tokens"] == 472
-    assert snapshot["last_model"] == "gemini-3.8-flash"
+    assert snapshot["last_model"] == ai.DEFAULT_MODEL
 
 
 def test_invalid_mode_is_reported_as_configuration_error(monkeypatch, valid_event):

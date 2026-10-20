@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import logging
 import os
+from pathlib import Path
 import time
 from threading import Lock
 
@@ -32,10 +34,17 @@ from .models import (
 )
 from .services import finalize_plan, merge_user_state
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize_database()
+    if os.getenv("VERCEL") and not os.getenv("FESTIVA_DB_PATH"):
+        logger.warning(
+            "Vercel detected without FESTIVA_DB_PATH; using ephemeral "
+            "/tmp/festiva.db. Plans may not persist across function instances."
+        )
     yield
 
 
@@ -196,7 +205,10 @@ def diagnostics():
     return {
         "status": "ok",
         "ai": ai_status(),
-        "database": {"plans": database.count_plans()},
+        "database": {
+            "backend": database.storage_backend(),
+            "plans": database.count_plans(),
+        },
         "cache": {"generation_entries": cache_entries()},
         "metrics": metrics.snapshot(),
     }
@@ -328,3 +340,27 @@ def update_expense(plan_id: str, expense_id: str, update: ExpenseUpdate):
         return finalize_plan(content, plan.event, plan.ai_mode, existing=plan)
 
     return _update_plan(plan_id, apply)
+
+
+@app.api_route(
+    "/api/{path:path}",
+    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    include_in_schema=False,
+)
+async def api_not_found(path: str):
+    """Keep unknown API paths as JSON 404s instead of the SPA fallback."""
+    raise HTTPException(status_code=404, detail="API route not found.")
+
+
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    if hasattr(app, "frontend"):
+        app.frontend("/", directory=str(_FRONTEND_DIST))
+    else:  # compatibility with older FastAPI releases
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount(
+            "/",
+            StaticFiles(directory=str(_FRONTEND_DIST), html=True),
+            name="frontend",
+        )

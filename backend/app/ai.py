@@ -31,7 +31,7 @@ from .services import (
 logger = logging.getLogger(__name__)
 ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 PROMPT_VERSION = "2026-10-21.1"
 MAX_TRANSIENT_RETRIES = 2
 
@@ -42,12 +42,13 @@ _GENERATE_SYSTEM_PROMPT = (
     "personalized plan for the stated event type, date, location, budget, guest "
     "count, dietary needs, accessibility needs, and preferences. Use itemized "
     "planning estimates in the event currency that sum to approximately the budget. "
-    "Include preparation tasks, an event-day schedule, vendor categories to research, "
-    "and specific theme, decoration, menu, and activity ideas. Never claim a booking, "
-    "a verified vendor, live availability, or a confirmed quotation. If the date is "
-    "missing, ask for it in clarifying_questions and do not invent one. Be concise, "
-    "practical, inclusive, and culturally respectful; do not infer identity or "
-    "traditions from location. Use empty lists when there is nothing useful to add."
+    "Provide at least one theme option, expense, preparation task, schedule item, "
+    "vendor category, and specific theme, decoration, menu, or activity idea. Never "
+    "claim a booking, a verified vendor, live availability, or a confirmed quotation. "
+    "If the date is missing, ask for it in clarifying_questions and do not invent one. "
+    "Be concise, practical, inclusive, and culturally respectful; do not infer identity "
+    "or traditions from location. Use empty lists for optional lists when there is "
+    "nothing useful to add."
 )
 
 _REVISE_SYSTEM_PROMPT = (
@@ -206,6 +207,8 @@ _UNSUPPORTED_SCHEMA_KEYWORDS = {
     "exclusiveMaximum",
     "exclusiveMinimum",
     "format",
+    "maxItems",
+    "minItems",
     "multipleOf",
     "pattern",
     "title",
@@ -255,11 +258,21 @@ def _clean_schema(value: Any, defs: dict[str, Any] | None = None) -> Any:
             if len(concrete) == 1:
                 value = {**value, "type": concrete[0]}
 
-        return {
-            key: _clean_schema(item, defs)
-            for key, item in value.items()
-            if key not in _UNSUPPORTED_SCHEMA_KEYWORDS
-        }
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in _UNSUPPORTED_SCHEMA_KEYWORDS:
+                continue
+            if key == "properties" and isinstance(item, dict):
+                # Property names are field names, not schema keywords. Cleaning
+                # them as keywords would delete fields such as ``title``.
+                cleaned[key] = {
+                    name: _clean_schema(spec, defs) for name, spec in item.items()
+                }
+            elif key in {"required", "enum"}:
+                cleaned[key] = item
+            else:
+                cleaned[key] = _clean_schema(item, defs)
+        return cleaned
     if isinstance(value, list):
         return [_clean_schema(item, defs) for item in value]
     return value
@@ -295,8 +308,10 @@ def _get_client():
 
 
 def _retry_after_seconds(error: Exception) -> int | None:
-    response = getattr(error, "response", None)
-    headers = getattr(response, "headers", None)
+    headers = getattr(error, "headers", None)
+    if not headers:
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None)
     if not headers:
         return None
     try:
@@ -311,9 +326,15 @@ def _retry_after_seconds(error: Exception) -> int | None:
         return None
 
 
-def _map_api_error(error: Exception) -> AIServiceError:
+def _map_api_error(error: Exception) -> AIServiceError | None:
     code = getattr(error, "code", None)
+    if not isinstance(code, int):
+        # Interactions SDK errors expose ``status_code`` instead of ``code``.
+        status_code = getattr(error, "status_code", None)
+        code = status_code if isinstance(status_code, int) else None
     status = str(getattr(error, "status", "") or "").upper()
+    if code is None:
+        return None
     if code == 429 or status == "RESOURCE_EXHAUSTED":
         retry_after = _retry_after_seconds(error)
         return AIServiceError(
@@ -358,11 +379,6 @@ def _single_provider_call(
     schema: dict[str, Any],
     retry_count: int,
 ) -> str:
-    try:
-        from google.genai import errors
-    except ImportError:
-        errors = None  # type: ignore[assignment]
-
     model = gemini_model()
     client = _get_client()
     started = time.perf_counter()
@@ -420,11 +436,7 @@ def _single_provider_call(
         raise
     except Exception as exc:  # mapped below without exposing provider internals
         latency_ms = round((time.perf_counter() - started) * 1000)
-        mapped = (
-            _map_api_error(exc)
-            if errors is not None and isinstance(exc, errors.APIError)
-            else None
-        )
+        mapped = _map_api_error(exc)
         if mapped is None:
             try:
                 import httpx
@@ -457,7 +469,7 @@ def _single_provider_call(
         logger.warning(
             "Gemini request failed category=%s code=%s latency_ms=%d exception=%s",
             mapped.category,
-            getattr(exc, "code", "unknown"),
+            getattr(exc, "code", None) or getattr(exc, "status_code", "unknown"),
             latency_ms,
             type(exc).__name__,
         )

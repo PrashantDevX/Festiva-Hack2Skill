@@ -7,8 +7,11 @@ __pycache__/
 *.db-shm
 *.db-journal
 .env
+.vercel/
 node_modules/
 dist/
 *.tsbuildinfo
 frontend/playwright-report/
 frontend/test-results/
+.vercel
+.env*
