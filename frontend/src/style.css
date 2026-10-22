@@ -385,3 +385,119 @@ h1 { font-family: var(--serif); font-size: clamp(30px, 3.2vw, 43px); line-height
 .welcome-copy > p { font-size: 15px; }
 .welcome-footer { font-size: 11px; }
 
+/* WCAG 2.2 AA contrast pass. Muted copy keeps its visual hierarchy but now
+   clears 4.5:1 against the white, cream, pale-green, and beige surfaces. */
+.side-label,
+.saved-count,
+.saved-event-text small,
+.sidebar-footer small,
+.empty-side,
+.breadcrumb,
+.page-footer,
+.subtitle,
+.form-section-heading p,
+.field small,
+.form-actions p,
+.event-meta,
+.stat-top,
+.stat-card > small,
+.muted,
+.expense-title span,
+.expense-amount small,
+.budget-total small,
+.task-text small,
+.vendor-row small,
+.is-done .task-text strong,
+.is-done > span:nth-of-type(2) strong,
+.vendor-fields label,
+.schedule-time,
+.schedule-row small,
+.idea-item p,
+.idea-item small,
+.savings-card li,
+.activity-item small,
+.assumptions > strong,
+.assumptions li,
+.welcome-copy > p,
+.welcome-bottom small,
+.welcome-footer {
+  color: #59645c;
+}
+
+.side-link,
+.secondary-button,
+.quote-status select {
+  color: #4f5b52;
+}
+
+.back-link,
+.overview-copy {
+  color: #566158;
+}
+
+.eyebrow,
+.theme-chips span,
+.ai-checks span,
+.task-count,
+.impact-tag,
+.refine-card .eyebrow,
+.refine-card > p:not(.eyebrow),
+.prompt-suggestions > span,
+.prompt-suggestions button,
+.welcome-kicker,
+.welcome-trust span {
+  color: #4f604d;
+}
+
+.ai-indicator {
+  color: #66553f;
+}
+
+.clarification-box {
+  color: #63533d;
+}
+
+.timeline-notice {
+  color: #74512f;
+}
+
+.priority.high {
+  color: #8f4c3e;
+}
+
+.priority.medium {
+  color: #6f5a2c;
+}
+
+.priority.low {
+  color: #4d664f;
+}
+
+.vendor-save {
+  color: #4b634e;
+}
+
+.vendor-status {
+  color: #625c4d;
+}
+
+.vendor-status.booked {
+  color: #436a49;
+}
+
+.avatar,
+.art-card > span,
+.art-card > i {
+  color: #6f4e38;
+}
+
+.saved-chevron,
+.heading-icon {
+  color: #6f786f;
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.refine-card textarea::placeholder {
+  color: #6b736b;
+}

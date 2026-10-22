@@ -16,7 +16,9 @@ const pythonCommand =
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
+  workers: 1,
   reporter: 'list',
+  globalTeardown: './e2e/global-teardown.ts',
   use: {
     baseURL: 'http://127.0.0.1:5173',
     channel: 'msedge',
@@ -31,6 +33,15 @@ export default defineConfig({
         ...process.env,
         FESTIVA_AI_MODE: 'demo',
         FESTIVA_DB_PATH: testDatabase,
+        FESTIVA_SESSION_SECRET:
+          'e2e-session-secret-that-is-long-enough-for-hmac',
+        FESTIVA_ALLOWED_ORIGINS: 'http://127.0.0.1:5173',
+        // Never let a developer's shell or .env point E2E at real Blob storage.
+        BLOB_READ_WRITE_TOKEN: '',
+        VERCEL_BLOB_READ_WRITE_TOKEN: '',
+        BLOB_STORE_ID: '',
+        VERCEL: '',
+        VERCEL_OIDC_TOKEN: '',
       },
       reuseExistingServer: false,
       timeout: 30000,

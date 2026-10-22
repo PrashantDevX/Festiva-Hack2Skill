@@ -10,6 +10,7 @@ from .models import Plan
 
 BLOB_PLAN_PREFIX = "plans/"
 _PLAN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_OWNER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
 
 
 def database_path() -> str:
@@ -44,10 +45,16 @@ def _blob():
     return blob
 
 
-def _plan_pathname(plan_id: str) -> str:
+def _owner_prefix(owner_id: str) -> str:
+    if not _OWNER_ID_PATTERN.fullmatch(owner_id):
+        raise ValueError("Invalid owner id.")
+    return f"{BLOB_PLAN_PREFIX}{owner_id}/"
+
+
+def _plan_pathname(plan_id: str, owner_id: str) -> str:
     if not _PLAN_ID_PATTERN.fullmatch(plan_id):
         raise ValueError("Invalid plan id.")
-    return f"{BLOB_PLAN_PREFIX}{plan_id}.json"
+    return f"{_owner_prefix(owner_id)}{plan_id}.json"
 
 
 def _origin_read_url(url: str) -> str:
@@ -89,10 +96,27 @@ def _initialize_sqlite() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS plans (
                     id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 )
+                """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(plans)").fetchall()
+            }
+            if "owner_id" not in columns:
+                # Existing local databases keep their rows but they remain
+                # unowned and are not returned to any session.
+                connection.execute(
+                    "ALTER TABLE plans ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_plans_owner_updated
+                ON plans(owner_id, updated_at DESC)
                 """
             )
 
@@ -104,10 +128,10 @@ def initialize_database() -> None:
     _initialize_sqlite()
 
 
-def _save_plan_blob(plan: Plan) -> Plan:
+def _save_plan_blob(plan: Plan, owner_id: str) -> Plan:
     blob = _blob()
     blob.put_blob(
-        _plan_pathname(plan.id),
+        _plan_pathname(plan.id, owner_id),
         plan.model_dump_json().encode("utf-8"),
         access="private",
         content_type="application/json",
@@ -117,10 +141,10 @@ def _save_plan_blob(plan: Plan) -> Plan:
     return plan
 
 
-def _list_plans_blob() -> list[Plan]:
+def _list_plans_blob(owner_id: str) -> list[Plan]:
     blob = _blob()
     plans: list[Plan] = []
-    for item in blob.query_blobs(prefix=BLOB_PLAN_PREFIX):
+    for item in blob.query_blobs(prefix=_owner_prefix(owner_id)):
         if not item.pathname.endswith(".json"):
             continue
         try:
@@ -132,12 +156,16 @@ def _list_plans_blob() -> list[Plan]:
     return plans[:100]
 
 
-def _get_plan_blob(plan_id: str) -> Plan | None:
+def _get_plan_blob(plan_id: str, owner_id: str) -> Plan | None:
     if not _PLAN_ID_PATTERN.fullmatch(plan_id):
+        return None
+    try:
+        pathname = _plan_pathname(plan_id, owner_id)
+    except ValueError:
         return None
     blob = _blob()
     try:
-        result = _read_blob_path(blob, _plan_pathname(plan_id))
+        result = _read_blob_path(blob, pathname)
     except blob.BlobNotFoundError:
         return None
     return Plan.model_validate_json(result.body)
@@ -152,35 +180,49 @@ def _count_plans_blob() -> int:
     )
 
 
-def _save_plan_sqlite(plan: Plan) -> Plan:
+def _save_plan_sqlite(plan: Plan, owner_id: str) -> Plan:
     payload = plan.model_dump_json()
     with closing(connect()) as connection:
         with connection:
             connection.execute(
                 """
-                INSERT INTO plans (id, created_at, updated_at, payload)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO plans (id, owner_id, created_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     updated_at = excluded.updated_at,
                     payload = excluded.payload
+                WHERE plans.owner_id = excluded.owner_id
                 """,
-                (plan.id, plan.created_at.isoformat(), plan.updated_at.isoformat(), payload),
+                (
+                    plan.id,
+                    owner_id,
+                    plan.created_at.isoformat(),
+                    plan.updated_at.isoformat(),
+                    payload,
+                ),
             )
     return plan
 
 
-def _list_plans_sqlite() -> list[Plan]:
+def _list_plans_sqlite(owner_id: str) -> list[Plan]:
     with closing(connect()) as connection:
         rows = connection.execute(
-            "SELECT payload FROM plans ORDER BY updated_at DESC LIMIT 100"
+            """
+            SELECT payload FROM plans
+            WHERE owner_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 100
+            """,
+            (owner_id,),
         ).fetchall()
     return [Plan.model_validate_json(row["payload"]) for row in rows]
 
 
-def _get_plan_sqlite(plan_id: str) -> Plan | None:
+def _get_plan_sqlite(plan_id: str, owner_id: str) -> Plan | None:
     with closing(connect()) as connection:
         row = connection.execute(
-            "SELECT payload FROM plans WHERE id = ?", (plan_id,)
+            "SELECT payload FROM plans WHERE id = ? AND owner_id = ?",
+            (plan_id, owner_id),
         ).fetchone()
     return Plan.model_validate_json(row["payload"]) if row else None
 
@@ -191,22 +233,22 @@ def _count_plans_sqlite() -> int:
     return int(row["total"]) if row else 0
 
 
-def save_plan(plan: Plan) -> Plan:
+def save_plan(plan: Plan, owner_id: str) -> Plan:
     if _blob_configured():
-        return _save_plan_blob(plan)
-    return _save_plan_sqlite(plan)
+        return _save_plan_blob(plan, owner_id)
+    return _save_plan_sqlite(plan, owner_id)
 
 
-def list_plans() -> list[Plan]:
+def list_plans(owner_id: str) -> list[Plan]:
     if _blob_configured():
-        return _list_plans_blob()
-    return _list_plans_sqlite()
+        return _list_plans_blob(owner_id)
+    return _list_plans_sqlite(owner_id)
 
 
-def get_plan(plan_id: str) -> Plan | None:
+def get_plan(plan_id: str, owner_id: str) -> Plan | None:
     if _blob_configured():
-        return _get_plan_blob(plan_id)
-    return _get_plan_sqlite(plan_id)
+        return _get_plan_blob(plan_id, owner_id)
+    return _get_plan_sqlite(plan_id, owner_id)
 
 
 def count_plans() -> int:

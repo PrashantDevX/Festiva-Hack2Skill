@@ -2,7 +2,7 @@
 
 Festiva AI turns an event brief into a budget-aware, date-conscious celebration plan. It supports weddings, birthdays, anniversaries, college events, and community celebrations.
 
-**Live deployment:** <https://festiva-ai.vercel.app> — live Gemini mode using `gemini-3.5-flash-lite`. Live generation and revision have been verified both locally and against production. Demo mode remains available and is labeled everywhere it appears.
+**Live deployment:** <https://festiva-ai.vercel.app> — live Gemini mode using `gemini-3.5-flash-lite`. Live generation and revision have been verified both locally and against production. Demo mode remains available and is labeled everywhere it appears. No account or login is required: each browser gets a private anonymous workspace.
 
 ## Architecture
 
@@ -23,19 +23,21 @@ FastAPI + Pydantic
 
 - **Frontend:** React, TypeScript, and Vite. The UI creates plans, refines them, tracks tasks/vendors/actual spend, lists saved plans, and exports JSON. It calls the backend through the Vite `/api` proxy in development.
 - **Backend:** FastAPI with Pydantic request/response models. Routes validate input, call the AI service, then hand the generated content to deterministic business logic.
+- **Isolation:** each browser receives an anonymous, HMAC-signed session cookie. Plans are scoped to that owner in both Blob and SQLite storage, so judges still get a login-free demo while one visitor cannot read or modify another visitor's plans.
 - **AI layer:** official `google-genai` SDK using the Interactions API. Gemini supplies **planning content only**. The application owns all IDs, completion flags, actual spending, vendor contact details, booking status, totals, and deadlines.
-- **Persistence:** durable private Vercel Blob storage in production; SQLite with WAL mode and a busy timeout for local development and tests. `FESTIVA_DB_PATH` selects the local SQLite file. The SQLite schema is created at startup; there is no migration tool yet.
+- **Persistence:** durable private Vercel Blob storage in production; SQLite with WAL mode and a busy timeout for local development and tests. `FESTIVA_DB_PATH` selects the local SQLite file. Startup adds the `owner_id` column to an older local SQLite table automatically; there is no general migration tool yet.
 
 ### Request flow
 
 ```text
 Event form
+  -> anonymous signed browser session (owner ID)
   -> FastAPI validation
   -> AI generation (Gemini or deterministic demo)
   -> strict schema validation
   -> normalize generated content (drop model-authored user state)
   -> deterministic totals + deadline alignment
-  -> Vercel Blob (production) or SQLite (local)
+  -> owner-scoped Vercel Blob (production) or SQLite (local)
   -> UI
 ```
 
@@ -55,7 +57,7 @@ For revisions, the backend sends only planning content plus a compact summary of
 | Output cap | `FESTIVA_AI_MAX_OUTPUT_TOKENS=4096` by default |
 | Timeout | `GEMINI_TIMEOUT_SECONDS=45` by default (bounded to 5–120 seconds) |
 
-Official documentation used (checked **2026-10-21**):
+Official documentation used (checked **2026-10-22**):
 
 - Models: <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite>
 - Pricing and free tier: <https://ai.google.dev/gemini-api/docs/pricing>
@@ -66,7 +68,7 @@ Official documentation used (checked **2026-10-21**):
 
 ### Free-tier caveat
 
-The official pricing page checked on 2026-10-21 lists standard **Free Tier** input and output for Gemini 3.5 Flash Lite as free of charge. Google states that free-tier content may be used to improve Google products. Exact RPM/RPD limits are shown per project in AI Studio rather than as a single published number, and they differ by model. The project defaults to **`gemini-3.5-flash-lite`** for higher free-tier daily headroom; `GEMINI_MODEL` can override it. The application does **not** hardcode or claim specific quota figures.
+The official pricing page checked on 2026-10-22 lists standard **Free Tier** input and output for Gemini 3.5 Flash Lite as free of charge. Google states that free-tier content may be used to improve Google products. Exact RPM/RPD limits are shown per project in AI Studio rather than as a single published number, and they differ by model. The project defaults to **`gemini-3.5-flash-lite`** for higher free-tier daily headroom; `GEMINI_MODEL` can override it. The application does **not** hardcode or claim specific quota figures.
 
 ## Requirements and evidence
 
@@ -76,13 +78,14 @@ The official pricing page checked on 2026-10-21 lists standard **Free Tier** inp
 | GenAI planning and revision | `backend/app/ai.py` | Official Gemini SDK path; mocked live-mode tests plus successful live generation/revision runs |
 | Independently calculated budget | `backend/app/services.py` | Unit tests for totals, remaining balance, actual spend, overruns |
 | Event-date-aware preparation | `backend/app/services.py` | Timeline ordering, missing-date, and past-date tests |
-| Persistent plans and checklists | `backend/app/database.py`, `backend/app/main.py` | Durable Blob-backed API in production; SQLite-backed API and E2E workflow locally |
-| Save, retrieve, revise, export | `backend/app/main.py`, `frontend/src/App.tsx` | Persisted plan API, E2E revision, JSON export |
+| Persistent plans and checklists | `backend/app/database.py`, `backend/app/main.py` | Owner-scoped durable Blob-backed API in production; owner-scoped SQLite-backed API and E2E workflow locally |
+| Save, retrieve, revise, export | `backend/app/main.py`, `frontend/src/App.tsx` | Persisted plan API, E2E revision, and verified JSON download |
+| Per-user isolation | `backend/app/auth.py`, `backend/app/database.py`, `backend/app/main.py` | Signed anonymous sessions, owner-scoped storage, cross-user 404s, tampered-cookie tests |
 | Preserve user decisions on revision | `backend/app/services.py`, `backend/app/ai.py` | Unit tests for completed tasks, vendor details, actual spend, date, currency |
 | Safe AI failures | `backend/app/ai.py`, `backend/app/main.py` | Tests for missing key, bad model, 429, timeout, malformed output |
 | Efficient AI usage | `backend/app/ai.py`, `backend/app/cache.py` | TTL cache, single-flight lock, bounded retries, token metrics |
-| Accessible, responsive workspace | `frontend/src/App.tsx`, `frontend/src/style.css` | Skip link, labels, focus styles, status announcements, reduced motion, responsive layout |
-| Security and reliability | `backend/app/ai.py`, `backend/app/main.py` | Server-only key, input bounds, body limit, rate limits, strict validation, safe errors |
+| Accessible, responsive workspace | `frontend/src/App.tsx`, `frontend/src/style.css`, `frontend/e2e/accessibility.spec.ts` | Axe WCAG 2.2 AA checks, 4.5:1 contrast palette, skip link, focus styles, responsive/keyboard tests |
+| Security and reliability | `backend/app/auth.py`, `backend/app/ai.py`, `backend/app/main.py` | Server-only key, signed sessions, owner scoping, CSRF-origin checks, input bounds, body limit, rate limits, strict validation, safe errors |
 
 ## Requirements
 
@@ -147,7 +150,8 @@ The official pricing page checked on 2026-10-21 lists standard **Free Tier** inp
 | `FESTIVA_AI_CACHE_TTL_SECONDS` | `3600` | In-process generation cache TTL; `0` disables caching. |
 | `FESTIVA_DB_PATH` | `festiva.db` | Local SQLite database path. Ignored when Blob credentials are present. |
 | `BLOB_READ_WRITE_TOKEN` | — | Optional private Vercel Blob credential. When present, plans use Blob instead of SQLite. The Blob store connection adds it in production. |
-| `FESTIVA_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated exact browser origins allowed by CORS. |
+| `FESTIVA_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated exact browser origins allowed by CORS and for unsafe-method origin checks. Same-host origins are also accepted. |
+| `FESTIVA_SESSION_SECRET` | — | HMAC secret for anonymous session cookies. Required on Vercel; must be at least 32 characters. Rotating it invalidates existing anonymous sessions. |
 
 ## Reliability and cost controls
 
@@ -157,6 +161,7 @@ The official pricing page checked on 2026-10-21 lists standard **Free Tier** inp
 - **Structured schema retry:** a malformed or schema-invalid model response gets exactly one correction attempt. A second failure becomes a safe `502` error; there is no silent template fallback.
 - **Provider-safe schema:** the schema hint is generated from the Pydantic models, then inlined and reduced to the JSON Schema subset Gemini structured output reliably accepts (no `$ref`/`$defs`, `anyOf`, `format`, `pattern`, or exclusive numeric bounds). Pydantic still enforces the full rules locally, so stricter validation is never lost.
 - **Serialized writes:** revisions and checklist/spend PATCHes take a process-local write lock and re-read the latest plan before saving, so concurrent updates cannot silently overwrite each other. A revision also re-merges user state from the latest plan after generation.
+- **Session bootstrap:** the frontend loads health first and then the owner-scoped plan list, so the first anonymous cookie is established before plan requests can race.
 - **Deterministic calculations:** budget totals, remaining balance, over-budget state, actual spend, deadline ordering, and date notices are computed by application code, never trusted from the model.
 - **Minimal context:** the generation prompt sends only the event brief. Revisions send planning content and a compact user-state summary, not raw database rows.
 - **Aggregate metrics:** token counts, latency, retry counts, cache hits/misses, schema failures, and quota events are recorded without prompts, plans, event details, or credentials.
@@ -174,6 +179,9 @@ The official pricing page checked on 2026-10-21 lists standard **Free Tier** inp
 | Transient provider error | Bounded retries, then `503` |
 | Empty or schema-invalid output after one retry | `502`, `category: invalid_output`; saved plan unchanged |
 | Missing plan / task / vendor / expense | `404` |
+| Plan owned by another anonymous session | `404` (existence is not disclosed) |
+| Unsafe request with a foreign browser `Origin` | `403` before the route runs |
+| Missing production `FESTIVA_SESSION_SECRET` | `503`; plan routes fail closed |
 | Oversized request body | `413` before validation |
 | Too many general requests | `429` after 120 requests/minute/IP |
 | Too many AI actions | `429` after 10 generation/revision actions/10 minutes/IP |
@@ -184,21 +192,27 @@ The official pricing page checked on 2026-10-21 lists standard **Free Tier** inp
 - Event text and revisions are delimited and explicitly labeled as untrusted data in the system prompt. The prompt tells the model to ignore instructions embedded in that data.
 - Provider exceptions are mapped to fixed application messages; raw provider details and request content are not returned to the client.
 - Responses are validated against strict Pydantic models with `extra="forbid"`. Unknown or user-state fields from model output are rejected/removed.
-- CORS allows only the configured exact origins. API mutations use POST/PATCH, and request bodies are capped at 64 KB.
+- **Anonymous signed sessions:** the first plan request creates a random 256-bit owner ID and signs it with HMAC-SHA256. The cookie is `HttpOnly`, `SameSite=Lax`, `Secure` on Vercel, `Path=/`, and expires after 7 days. There is no login step, so the judge demo stays direct. An invalid, expired, or tampered cookie is replaced with a fresh owner; it cannot read the previous owner's plans.
+- **Per-user authorization:** Blob plans are stored at `plans/{owner_id}/{plan_id}.json`, and SQLite rows carry `owner_id`. List, read, revise, task, vendor, and expense routes all filter by the signed session owner. Cross-user reads and writes return `404` without revealing whether the plan exists.
+- **CSRF and browser-origin checks:** cookies are `SameSite=Lax`, and every unsafe API method with an `Origin` header must match the configured origins or the request's own host. CORS also allows only exact configured origins. Request bodies are capped at 64 KB.
+- **Response hardening:** API responses are `Cache-Control: no-store`; all responses include `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a strict referrer policy, a restrictive permissions policy, and a self-only Content Security Policy with inline styles allowed for React inline sizing. Vercel also sends HSTS (`max-age=63072000; includeSubDomains; preload`).
+- **Legacy data:** pre-auth Blob objects at `plans/{id}.json` and old SQLite rows with an empty owner are left untouched but are not returned to any anonymous session. The existing production verification plan remains stored; this deploy does not delete it.
+- **Session limitations:** anonymous sessions are browser-bound, not named accounts. Clearing cookies loses access, and rotating `FESTIVA_SESSION_SECRET` invalidates every session. There is no account recovery or cross-device identity.
+- The generation cache, rate-limit counters, and write locks are process-local; serverless instances do not share them. Same-plan writes across instances remain last-write-wins.
 - SQLite stores plan data unencrypted on disk locally; the private Blob store requires authentication but is not application-level encrypted. Do not store sensitive personal data without reviewing the provider's security model.
-- The application has **no authentication or per-user authorization**. Anyone who can reach the API can list and modify saved plans. Keep it local or place it behind an authenticated gateway before any public deployment.
 - Free-tier Gemini content may be used by Google to improve products, as described in the official pricing documentation. Review this before sending sensitive data.
 
 ## Accessibility
 
-- Skip-to-content link and a focusable main landmark.
+- Skip-to-content link and a focusable main landmark; the E2E suite asserts the skip link is first in tab order and moves focus to the main landmark.
 - Visible `:focus-visible` outlines for buttons, inputs, textareas, selects, and links.
 - Semantic form labels, `aria-label`s for icon-only controls, and screen-reader-only names for dense budget controls.
 - `role="status"` announcements for generation/revision progress and saved notices; `role="alert"` for errors.
-- `aria-current="page"` on the selected saved plan, `aria-busy` on in-flight forms, and a progress bar with values.
+- `aria-current="page"` on the selected saved plan, `aria-busy` on in-flight forms, and accessible progress bars for budget shares.
 - A text summary of budget totals for screen-reader users.
-- Responsive layouts, larger body text, and reduced-motion support.
-- Manual screen-reader, zoom, and automated accessibility audits have **not** been performed; these remain verification gaps.
+- Responsive layouts, larger body text, and reduced-motion support. E2E checks at 375px, 768px, and 1280px found no horizontal overflow.
+- **Automated Axe audit:** `@axe-core/playwright` runs WCAG 2.2 A/AA checks on the welcome page, planning form, and generated plan view. The suite fails on any violation, and the final run reports **0 violations**. The muted-text palette was darkened to clear 4.5:1 contrast on the white, cream, pale-green, and beige surfaces.
+- Manual screen-reader and browser-zoom testing have **not** been performed; those remain verification gaps. The automated audit and keyboard/responsive checks are not a substitute for assistive-technology testing.
 
 ## Tests and actual results
 
@@ -216,19 +230,22 @@ npm --prefix frontend run test:e2e
 npm --prefix frontend audit --audit-level=moderate
 ```
 
-The E2E test starts an isolated demo-mode API and Vite server, exercises the browser workflow, and removes its temporary SQLite database. It prefers `.venv` Python and falls back to `python`; override with `FESTIVA_PYTHON` if needed. Ports 8000 and 5173 must be free.
+The E2E suite starts an isolated demo-mode API and Vite server, exercises the browser workflow, verifies JSON export, and runs Axe WCAG checks plus keyboard/responsive checks. The test API forces a temporary SQLite database and clears Blob/Vercel credentials so it cannot touch production storage. A global teardown removes the temporary database. It prefers `.venv` Python and falls back to `python`; override with `FESTIVA_PYTHON` if needed. Ports 8000 and 5173 must be free.
 
-### Latest local verification (2026-10-21)
+### Latest local verification (2026-10-22)
 
 | Check | Result |
 |---|---|
-| `python -m pytest -q` | **45 passed**, 1 third-party Starlette/httpx deprecation warning |
+| `python -m pytest -q` | **55 passed** |
 | `npm --prefix frontend run build` | **passed** (TypeScript check + Vite production bundle) |
-| `npm --prefix frontend run test:e2e` | **1 passed** (8.9s) in Microsoft Edge against isolated demo API/database |
+| `npm --prefix frontend run test:e2e` | **3 passed** in Microsoft Edge against isolated demo API/database |
+| Axe WCAG 2.2 A/AA (`@axe-core/playwright`) | **0 violations** on welcome, form, and generated plan views |
+| Keyboard/responsive E2E | Skip link focused and moved to `#main-content`; no horizontal overflow at 375, 768, or 1280px |
+| JSON export E2E | Downloaded `festiva-anniversary-*.json` and verified revised budget and actual spend |
 | `npm --prefix frontend audit --audit-level=moderate` | **0 vulnerabilities** |
 | Live Gemini generation + revision (`gemini-3.5-flash-lite`) | **2/2 succeeded**; see the measured usage below |
 | Vercel entrypoint local smoke (`uvicorn main:app`) | `/api/health` OK, `/` served the built SPA, unknown `/api/*` returned JSON `404`, demo plan created |
-| Deployed production API (live Gemini) | create, immediate PATCH→GET/list, and revision succeeded; ₹75,000 plan revised to ₹67,500 with task state preserved |
+| Deployed production workflow (live Gemini) | **201 create**, **200 task update**, **200 revision**, **200 export**, expected **404** cross-user; details below |
 | Production health | `live`, `ok`, `gemini-3.5-flash-lite`, key configured |
 | `backend/scripts/verify_gemini.py` without a key | **exit 2**, clear message, **no network request** (verified before the key was added) |
 
@@ -247,19 +264,27 @@ The E2E test starts an isolated demo-mode API and Vite server, exercises the bro
 
 This local run went through the actual HTTP API and the Vercel entrypoint (`POST /api/plans`, then `POST /api/plans/{id}/revise`), not just the script. The earlier `verify_gemini.py --revision` run also passed 2/2 with `1,094 / 1,582 / 2,676` tokens and `4,109.5 ms` average latency.
 
-**Production verification (2026-10-21, across the final two deployments, <https://festiva-ai.vercel.app>):**
+**Production verification (2026-10-22, <https://festiva-ai.vercel.app>):**
 
 | Metric | Value |
 |---|---|
 | Health | `live`, `ok`, `gemini-3.5-flash-lite`, provider configured |
-| Storage diagnostics | `backend=vercel-blob`, `plans=1` |
-| Create plan | **201**; 4 expenses, 3 tasks, 2 vendors, 1 idea; estimated `75,000 INR` |
-| Create usage | input / output / total `310 / 810 / 1,120` tokens; `15,444 ms` |
-| Revision | **200**; budget `67,500 INR`, estimated `67,500 INR`, tasks and completion flags preserved |
-| Revision usage | input / output / total `846 / 876 / 1,722` tokens; `3,200 ms` |
-| Immediate PATCH → GET and list | completion toggled both ways; every read matched the write |
-| Persistence across redeploy | plan created before the redeploy remained readable afterward with `backend=vercel-blob` |
-| Schema validation failures / transient retries / quota events | `0 / 0 / 0` |
+| Auth diagnostics | `anonymous-signed-session`, `configured=true` |
+| Session cookie | `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, future expiry |
+| Storage diagnostics | `backend=vercel-blob`, `plans=2` (legacy object + new owner-scoped plan) |
+| Create plan | **201**; budget/estimated `30,000 INR`; 3 tasks, 2 vendors |
+| Task update | **200**; completion persisted |
+| Revision | **200**; budget/estimated `25,000 INR`; user completion flag preserved |
+| Export | downloaded `festiva-birthday.json`; budget/estimated `25,000 INR`; completion flag preserved |
+| Cross-user list | **200**, empty |
+| Cross-user get / task PATCH / vendor PATCH / expense PATCH / revise | **404 / 404 / 404 / 404 / 404** |
+| Owner re-read after other session attempts | **200** |
+| Response headers | CSP + HSTS present; API `Cache-Control: no-store` |
+| Browser console errors | **0** |
+
+This run made exactly one live create and one live revision. It created plan `08fc64122de04cca801378aa5cce651e` and did not delete it. The pre-auth verification plan remains untouched in the same Blob store but is not exposed to any anonymous session. Token usage for this run was not aggregated because the serverless instance that answered diagnostics had restarted; the local measured run above reports token usage.
+
+The full workflow above was verified on `dpl_2zLsnNazFe1rbYaexvLLMKqmmRzo`. The final redeploy (`dpl_BYVC3VyJR2N9erQrivTR1HseitLN`) changed only SQLite-only owner-takeover hardening, origin normalization, and documentation, so the Blob path and UI were unchanged. A post-redeploy smoke test without any Gemini call confirmed: health `ok`/`live`/`gemini-3.5-flash-lite`, auth configured, private Blob backend, CSP and `no-store`, a new session sees an empty list, cross-session read and write return `404`, cross-origin mutation returns `403`, and the browser console is clean.
 
 The production URL is live; the metrics above are from requests made against it. Quota limits and verified-vendor data are not claimed. The key is stored as a Vercel **Sensitive** environment variable and is not printed or committed.
 
@@ -281,9 +306,9 @@ The script forces live mode, makes one real structured generation (and optionall
 **Published on Vercel (production):**
 
 - Stable alias: <https://festiva-ai.vercel.app>
-- Latest deployment: <https://festiva-g13utpvkr-prashant-singhs-projects-4b5930a2.vercel.app> (`dpl_6RjaVzAQQucb9j6vbXWBYhB75N5T`)
+- Latest deployment: <https://festiva-37fd47og5-prashant-singhs-projects-4b5930a2.vercel.app> (`dpl_BYVC3VyJR2N9erQrivTR1HseitLN`)
 - Vercel project: `prashant-singhs-projects-4b5930a2/festiva-ai`
-- Production environment variables are stored in Vercel; `GEMINI_API_KEY` is marked **Sensitive** and is not in the repository.
+- Production environment variables are stored in Vercel; `GEMINI_API_KEY`, `BLOB_READ_WRITE_TOKEN`, and `FESTIVA_SESSION_SECRET` are marked **Sensitive** and are not in the repository.
 - Build used Python 3.13, installed runtime dependencies with `uv`, built the Vite bundle, and completed successfully.
 
 ### What is configured
@@ -304,7 +329,7 @@ The script forces live mode, makes one real structured generation (and optionall
 vercel --prod
 ```
 
-Production variables currently set: `GEMINI_API_KEY` (sensitive), `BLOB_READ_WRITE_TOKEN` (sensitive, added by the Blob store connection), `FESTIVA_AI_MODE=live`, `GEMINI_MODEL=gemini-3.5-flash-lite`, `GEMINI_TIMEOUT_SECONDS=15`, `FESTIVA_AI_MAX_OUTPUT_TOKENS=4096`, `FESTIVA_AI_TEMPERATURE=0.5`, `FESTIVA_AI_CACHE_TTL_SECONDS=3600`. `FESTIVA_DB_PATH` is not set in production.
+Production variables currently set: `GEMINI_API_KEY` (sensitive), `BLOB_READ_WRITE_TOKEN` (sensitive, added by the Blob store connection), `FESTIVA_SESSION_SECRET` (sensitive, HMAC session signing key), `FESTIVA_AI_MODE=live`, `GEMINI_MODEL=gemini-3.5-flash-lite`, `GEMINI_TIMEOUT_SECONDS=15`, `FESTIVA_AI_MAX_OUTPUT_TOKENS=4096`, `FESTIVA_AI_TEMPERATURE=0.5`, `FESTIVA_AI_CACHE_TTL_SECONDS=3600`. `FESTIVA_DB_PATH` is not set in production.
 
 To rotate the key or change settings:
 
@@ -321,23 +346,24 @@ Do not put the key in `vercel.json`, source files, or a committed `.env`.
 
 ### Durable plan storage
 
-Production uses a private **Vercel Blob** store (`festiva-plans`, region `iad1`) connected to the project. Each plan is stored as `plans/{id}.json`; reads and writes go through the Blob SDK, so saved plans survive cold starts and are visible to every function instance.
+Production uses a private **Vercel Blob** store (`festiva-plans`, region `iad1`) connected to the project. Each plan is stored at `plans/{owner_id}/{plan_id}.json`; reads and writes go through the Blob SDK, so saved plans survive cold starts and are visible to every function instance.
 
 - Reliable read-after-write: private Blob reads normally pass through the CDN, which can return the previous object after an overwrite. The Python SDK does not yet expose the JavaScript SDK's `useCache: false`, so the storage layer constructs delivered URLs with `cache=0`, the same origin-read bypass used internally by the JavaScript SDK. Unit tests assert every plan read includes it, and a real write→read test against the provisioned store passed.
 - `BLOB_READ_WRITE_TOKEN` is a sensitive production variable. Locally the app falls back to SQLite, which keeps tests and offline development independent of Vercel.
-- Create, read, list, count, overwrite, and unsafe-ID rejection are covered by tests with an in-memory Blob fake, plus real Blob round-trip and consistency checks against the provisioned store.
-- Listing is capped at 100 plans, matching the previous SQLite behavior.
-- Blob has no atomic compare-and-set for uploads, so concurrent edits to the *same* plan are last-write-wins. Creating different plans does not overwrite other plans. Add per-user auth and optimistic concurrency before multi-user production use.
+- Create, read, list, count, overwrite, owner isolation, and unsafe-ID rejection are covered by tests with an in-memory Blob fake, plus real Blob round-trip and consistency checks against the provisioned store.
+- Listing is capped at 100 plans per owner, matching the previous SQLite behavior.
+- Pre-auth objects at `plans/{id}.json` remain in the store but are not listed or readable through the owner-scoped API. The existing production verification plan was not deleted.
+- Blob has no atomic compare-and-set for uploads, so concurrent edits to the *same* plan across serverless instances are last-write-wins. Creating different plans does not overwrite other plans. Add optimistic concurrency if multi-writer editing becomes a requirement.
 
 The generation cache, rate-limit counters, and write locks remain process-local; serverless instances do not share them.
 
 ### Remaining production requirements
 
-1. Authentication, per-user plan ownership/authorization, and HTTPS.
-2. Shared cache and rate-limit store (Redis or similar).
-3. Monitoring/alerting for error categories, latency, and quota events.
-4. A backup/export and retention policy for the Blob store before storing irreplaceable user data.
-5. Confirm the AI Studio RPM/RPD for `gemini-3.5-flash-lite` and set alerts before sharing the URL widely.
+1. Shared cache and rate-limit store (Redis or similar) if traffic spans multiple serverless instances.
+2. Monitoring/alerting for error categories, latency, and quota events.
+3. A backup/export and retention policy for the Blob store before storing irreplaceable user data.
+4. Confirm the AI Studio RPM/RPD for `gemini-3.5-flash-lite` and set alerts before sharing the URL widely.
+5. Named accounts with recovery and cross-device access if the product needs identity beyond the anonymous browser session.
 
 ## Changed files
 
@@ -346,28 +372,36 @@ The generation cache, rate-limit counters, and write locks remain process-local;
 - `backend/app/services.py` — normalization, user-state merge, deterministic budget/timeline logic, improved demo revision.
 - `backend/app/cache.py` — new thread-safe TTL cache.
 - `backend/app/observability.py` — new aggregate AI metrics.
-- `backend/app/main.py` — health/diagnostics, AI error handler with `Retry-After`, AI-specific rate limiting.
-- `backend/app/database.py` — SQLite locally; durable private Vercel Blob storage in production; plan count and backend reporting.
+- `backend/app/main.py` — health/diagnostics, AI error handler with `Retry-After`, AI-specific rate limiting, signed-session middleware, origin checks, security headers, owner-scoped routes.
+- `backend/app/auth.py` — HMAC-SHA256 anonymous sessions, expiry/tamper checks, production fail-closed configuration.
+- `backend/app/database.py` — owner-scoped SQLite and durable private Vercel Blob storage; owner-column migration; plan count and backend reporting.
 - `backend/__init__.py` — package marker for the Vercel entrypoint.
-- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py` — updated/expanded coverage (45 tests).
+- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py`, `test_security.py` — updated/expanded coverage (55 tests), including cross-user isolation, tampered cookies, origin rejection, fail-closed secret handling, short-secret rejection, and SQLite owner-takeover prevention.
 - `backend/scripts/verify_gemini.py` — operator live-verification script; `--model` override.
 - `backend/requirements.txt` — added `google-genai` and `vercel-blob`.
 - `main.py`, `requirements.txt`, `vercel.json`, `.python-version`, `.vercelignore` — Vercel entrypoint, runtime dependencies, build/function configuration, Python pin, upload exclusions.
-- `.env.example`, `pytest.ini`, `.gitignore` — configuration and test-root support.
-- `frontend/src/types.ts`, `api.ts`, `App.tsx`, `style.css` — Gemini labels, request timeout/error metadata, duplicate-request guards, accessibility/readability improvements.
-- `frontend/playwright.config.ts` — prefers the repository virtualenv Python for E2E.
+- `.env.example`, `pytest.ini`, `.gitignore` — configuration and test-root support, including `FESTIVA_SESSION_SECRET`.
+- `frontend/src/types.ts`, `api.ts`, `App.tsx`, `style.css` — Gemini labels, request timeout/error metadata, duplicate-request guards, sequential session bootstrap, accessible progress bars, WCAG contrast palette, and accessibility/readability improvements.
+- `frontend/index.html`, `frontend/public/favicon.svg` — page metadata and favicon.
+- `frontend/playwright.config.ts` — deterministic single-worker E2E, virtualenv Python preference, and test session secret.
+- `frontend/e2e/planning-workflow.spec.ts`, `accessibility.spec.ts`, `global-teardown.ts` — workflow/export verification, Axe WCAG audit, keyboard/responsive checks, and database cleanup.
+- `frontend/package.json`, `package-lock.json` — added `@axe-core/playwright`.
 - `README.md` — this document.
 
 ## Remaining gaps and next steps
 
-1. **Authentication and ownership:** add user accounts, per-user plan authorization, and session/CSRF protection before any public use.
+1. **Session identity:** anonymous sessions are browser-bound. There is no account recovery, cross-device access, or user profile; clearing cookies creates a new empty workspace. Add named accounts only if the product needs them.
 2. **Scale-out:** move the generation cache and rate-limit counters to Redis (or similar) so instances share them.
 3. **Observability:** export metrics to a monitoring system and add alerts for quota, schema failures, and latency.
-4. **Blob operations:** add a backup/export and retention policy, and clean up the verification plans currently in the store.
-5. **Accessibility verification:** run automated audits and manual keyboard/screen-reader/zoom checks.
-6. **Frontend tests:** add component/unit tests for duplicate-request guards and error states; the current browser test covers one full workflow.
+4. **Blob operations:** add a backup/export and retention policy for live data. Legacy pre-auth objects are intentionally left untouched.
+5. **Assistive-technology testing:** automated Axe, keyboard, and responsive checks pass; manual screen-reader and browser-zoom testing are still recommended.
+6. **Frontend tests:** add component/unit tests for duplicate-request guards and error states; the browser suite covers the full workflow and accessibility baseline.
 7. **Provider variations:** exercise 429/quota, timeout, and malformed-output behavior against the live API; current mapping is verified with deterministic mocks plus the successful live path.
 8. **AI quality evaluation:** add a small, reviewed prompt/response evaluation set for budget coherence, inclusion, and cultural neutrality.
 9. **Provider limits:** confirm the project's actual RPM/RPD in AI Studio. The default model is `gemini-3.5-flash-lite` for higher daily headroom; `GEMINI_MODEL` can switch back to another Flash model.
 
 No verified-vendor data is claimed. The live Gemini metrics above are from actual verification runs; quota limits are not claimed because they are project-specific.
+
+### Challenge 5 submission note
+
+The official Hack2Skill Challenge 5 requirements page could not be retrieved during this audit on 2026-10-22. This README therefore does not invent challenge-specific rubric or repository rules; it reports only the provided brief, the deployed application, and the measured checks above.

@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { rmSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-
-test.afterAll(() => {
-  rmSync(path.join(os.tmpdir(), 'festiva-e2e-test.db'), { force: true })
-})
+import { readFileSync } from 'node:fs'
 
 test('creates, tracks, revises, and persists an event plan', async ({ page }) => {
   await page.goto('/')
@@ -45,6 +39,16 @@ test('creates, tracks, revises, and persists an event plan', async ({ page }) =>
   await page.getByRole('button', { name: /Refine this plan/ }).click()
   await expect(page.getByText('Revision applied and saved.')).toBeVisible()
   await expect(page.locator('.stat-card').nth(0)).toContainText('₹20,000')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export plan' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toMatch(/^festiva-anniversary.*\.json$/)
+  const downloadPath = await download.path()
+  expect(downloadPath).toBeTruthy()
+  const exported = JSON.parse(readFileSync(downloadPath!, 'utf8'))
+  expect(exported.event.budget).toBe(20000)
+  expect(exported.actual_total).toBe(8000)
 
   const response = await page.request.get('http://127.0.0.1:8000/api/plans')
   expect(response.ok()).toBeTruthy()

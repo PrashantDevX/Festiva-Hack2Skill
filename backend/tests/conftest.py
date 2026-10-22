@@ -33,6 +33,11 @@ def isolate_ai_state(monkeypatch):
     """Keep tests independent from a developer's real .env and prior calls."""
     for name in _AI_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv(
+        "FESTIVA_SESSION_SECRET",
+        "test-session-secret-that-is-long-enough-for-hmac",
+    )
     ai.reset_ai_state()
     main_module._requests_by_ip.clear()
     main_module._ai_requests_by_ip.clear()

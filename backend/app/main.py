@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 load_dotenv()
 
-from . import database
+from . import auth, database
 from .ai import (
     AIServiceError,
     ai_status,
@@ -40,10 +40,19 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize_database()
-    if os.getenv("VERCEL") and not os.getenv("FESTIVA_DB_PATH"):
+    if (
+        os.getenv("VERCEL")
+        and database.storage_backend() == "sqlite"
+        and not os.getenv("FESTIVA_DB_PATH")
+    ):
         logger.warning(
-            "Vercel detected without FESTIVA_DB_PATH; using ephemeral "
-            "/tmp/festiva.db. Plans may not persist across function instances."
+            "Vercel detected without Blob storage or FESTIVA_DB_PATH; using "
+            "ephemeral /tmp/festiva.db. Plans may not persist across instances."
+        )
+    if os.getenv("VERCEL") and not auth.session_configured():
+        logger.error(
+            "FESTIVA_SESSION_SECRET is missing or shorter than 32 characters. "
+            "Plan routes will return 503 until it is configured."
         )
     yield
 
@@ -55,7 +64,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 origins = [
-    item.strip()
+    item.strip().rstrip("/")
     for item in os.getenv(
         "FESTIVA_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
     ).split(",")
@@ -180,6 +189,121 @@ async def request_limits(request: Request, call_next):
     return await call_next(request)
 
 
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _is_plan_path(path: str) -> bool:
+    return path == "/api/plans" or path.startswith("/api/plans/")
+
+
+def _origin_is_allowed(request: Request, origin: str) -> bool:
+    normalized = origin.rstrip("/")
+    if normalized in origins:
+        return True
+    host = request.headers.get("host", "").strip()
+    if not host:
+        return False
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    scheme = (
+        forwarded_proto.split(",")[0].strip()
+        if forwarded_proto
+        else request.url.scheme
+    )
+    return normalized == f"{scheme}://{host}"
+
+
+def _request_is_https(request: Request) -> bool:
+    if os.getenv("VERCEL"):
+        return True
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    return (
+        request.url.scheme == "https"
+        or forwarded_proto.split(",")[0].strip() == "https"
+    )
+
+
+def _harden_response(response, path: str):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Referrer-Policy", "strict-origin-when-cross-origin"
+    )
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'",
+    )
+    if path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.middleware("http")
+async def security_and_session(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and request.method in _UNSAFE_METHODS:
+        origin = request.headers.get("origin")
+        if origin and not _origin_is_allowed(request, origin):
+            return _harden_response(
+                JSONResponse(
+                    status_code=403,
+                    content={"detail": "Cross-origin request blocked."},
+                ),
+                path,
+            )
+
+    new_token: str | None = None
+    if _is_plan_path(path) and request.method != "OPTIONS":
+        owner_id = auth.validate_session(
+            request.cookies.get(auth.SESSION_COOKIE)
+        )
+        if owner_id is None:
+            try:
+                owner_id, new_token = auth.issue_session()
+            except auth.SessionConfigError:
+                logger.error(
+                    "Anonymous session configuration is missing or invalid."
+                )
+                return _harden_response(
+                    JSONResponse(
+                        status_code=503,
+                        content={
+                            "detail": "Session service is not configured."
+                        },
+                    ),
+                    path,
+                )
+        request.state.owner_id = owner_id
+
+    response = await call_next(request)
+
+    if new_token is not None:
+        response.set_cookie(
+            auth.SESSION_COOKIE,
+            new_token,
+            max_age=auth.SESSION_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+            secure=_request_is_https(request),
+            path="/",
+        )
+    return _harden_response(response, path)
+
+
+def _require_owner(request: Request) -> str:
+    owner_id = getattr(request.state, "owner_id", None)
+    if not isinstance(owner_id, str) or not owner_id:
+        raise HTTPException(
+            status_code=401, detail="A browser session is required."
+        )
+    return owner_id
+
+
 @app.exception_handler(AIServiceError)
 async def ai_error_handler(_: Request, exc: AIServiceError):
     headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
@@ -205,6 +329,10 @@ def diagnostics():
     return {
         "status": "ok",
         "ai": ai_status(),
+        "auth": {
+            "mode": "anonymous-signed-session",
+            "configured": auth.session_configured(),
+        },
         "database": {
             "backend": database.storage_backend(),
             "plans": database.count_plans(),
@@ -215,21 +343,22 @@ def diagnostics():
 
 
 @app.get("/api/plans", response_model=list[Plan])
-def read_plans():
-    return database.list_plans()
+def read_plans(request: Request):
+    return database.list_plans(_require_owner(request))
 
 
 @app.post("/api/plans", response_model=Plan, status_code=status.HTTP_201_CREATED)
 def create_plan(event: EventInput, request: Request):
+    owner_id = _require_owner(request)
     _reserve_ai_request(request)
     content, mode = generate_content(event)
     plan = finalize_plan(content, event, mode)
-    return database.save_plan(plan)
+    return database.save_plan(plan, owner_id)
 
 
 @app.get("/api/plans/{plan_id}", response_model=Plan)
-def read_plan(plan_id: str):
-    plan = database.get_plan(plan_id)
+def read_plan(plan_id: str, request: Request):
+    plan = database.get_plan(plan_id, _require_owner(request))
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found.")
     return plan
@@ -237,7 +366,8 @@ def read_plan(plan_id: str):
 
 @app.post("/api/plans/{plan_id}/revise", response_model=Plan)
 def revise_plan(plan_id: str, request: RevisionRequest, http_request: Request):
-    previous = database.get_plan(plan_id)
+    owner_id = _require_owner(http_request)
+    previous = database.get_plan(plan_id, owner_id)
     if previous is None:
         raise HTTPException(status_code=404, detail="Plan not found.")
     _reserve_ai_request(http_request)
@@ -250,26 +380,28 @@ def revise_plan(plan_id: str, request: RevisionRequest, http_request: Request):
     # Re-read under the write lock so a checklist or spend update made while
     # Gemini was generating is not lost by this save.
     with _plan_write_lock:
-        latest = database.get_plan(plan_id)
+        latest = database.get_plan(plan_id, owner_id)
         if latest is None:
             raise HTTPException(status_code=404, detail="Plan not found.")
         content = merge_user_state(latest, content)
         plan = finalize_plan(content, event, mode, existing=latest)
-        return database.save_plan(plan)
+        return database.save_plan(plan, owner_id)
 
 
-def _update_plan(plan_id: str, update_content) -> Plan:
+def _update_plan(plan_id: str, owner_id: str, update_content) -> Plan:
     with _plan_write_lock:
-        plan = database.get_plan(plan_id)
+        plan = database.get_plan(plan_id, owner_id)
         if plan is None:
             raise HTTPException(status_code=404, detail="Plan not found.")
         updated = update_content(plan)
         updated = updated.model_copy(update={"updated_at": datetime.now(timezone.utc)})
-        return database.save_plan(updated)
+        return database.save_plan(updated, owner_id)
 
 
 @app.patch("/api/plans/{plan_id}/tasks/{task_id}", response_model=Plan)
-def update_task(plan_id: str, task_id: str, update: CompletionUpdate):
+def update_task(
+    plan_id: str, task_id: str, update: CompletionUpdate, request: Request
+):
     def apply(plan: Plan) -> Plan:
         if not any(task.id == task_id for task in plan.prep_tasks):
             raise HTTPException(status_code=404, detail="Preparation task not found.")
@@ -281,11 +413,13 @@ def update_task(plan_id: str, task_id: str, update: CompletionUpdate):
         ]
         return plan.model_copy(update={"prep_tasks": tasks})
 
-    return _update_plan(plan_id, apply)
+    return _update_plan(plan_id, _require_owner(request), apply)
 
 
 @app.patch("/api/plans/{plan_id}/vendors/{vendor_id}", response_model=Plan)
-def update_vendor(plan_id: str, vendor_id: str, update: VendorUpdate):
+def update_vendor(
+    plan_id: str, vendor_id: str, update: VendorUpdate, request: Request
+):
     def apply(plan: Plan) -> Plan:
         if not any(vendor.id == vendor_id for vendor in plan.vendors):
             raise HTTPException(status_code=404, detail="Vendor checklist item not found.")
@@ -303,11 +437,13 @@ def update_vendor(plan_id: str, vendor_id: str, update: VendorUpdate):
         ]
         return plan.model_copy(update={"vendors": vendors})
 
-    return _update_plan(plan_id, apply)
+    return _update_plan(plan_id, _require_owner(request), apply)
 
 
 @app.patch("/api/plans/{plan_id}/expenses/{expense_id}", response_model=Plan)
-def update_expense(plan_id: str, expense_id: str, update: ExpenseUpdate):
+def update_expense(
+    plan_id: str, expense_id: str, update: ExpenseUpdate, request: Request
+):
     def apply(plan: Plan) -> Plan:
         if not any(item.id == expense_id for item in plan.expenses):
             raise HTTPException(status_code=404, detail="Expense not found.")
@@ -339,7 +475,7 @@ def update_expense(plan_id: str, expense_id: str, update: ExpenseUpdate):
         )
         return finalize_plan(content, plan.event, plan.ai_mode, existing=plan)
 
-    return _update_plan(plan_id, apply)
+    return _update_plan(plan_id, _require_owner(request), apply)
 
 
 @app.api_route(

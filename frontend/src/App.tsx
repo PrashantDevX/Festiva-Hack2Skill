@@ -103,13 +103,30 @@ function App() {
   }
 
   useEffect(() => {
-    Promise.all([api.health(), api.listPlans()])
-      .then(([service, saved]) => {
+    let cancelled = false
+
+    const bootstrap = async () => {
+      try {
+        // Health first, then the private plan list. This guarantees the first
+        // anonymous session cookie is established before plan requests race.
+        const service = await api.health()
+        if (cancelled) return
         setHealth(service)
+        const saved = await api.listPlans()
+        if (cancelled) return
         setPlans(saved)
         if (saved.length) setPlan(saved[0])
-      })
-      .catch((reason: Error) => setError(reason.message))
+      } catch (reason) {
+        if (!cancelled) {
+          setError(reason instanceof Error ? reason.message : 'Could not load your workspace.')
+        }
+      }
+    }
+
+    void bootstrap()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const completion = useMemo(() => {
@@ -359,7 +376,7 @@ function App() {
         </nav>
         <div className="sidebar-footer">
           <span className="avatar">F</span>
-          <span><strong>Your space</strong><small>Private on this device</small></span>
+          <span><strong>Your space</strong><small>Private to this browser</small></span>
         </div>
       </aside>
 
@@ -546,7 +563,7 @@ function App() {
                         <div className="expense-row" key={item.id}>
                           <div className="expense-info">
                             <div className="expense-title"><strong>{item.category}</strong><span>{item.item}</span></div>
-                            <div className="expense-meter" aria-label={`${item.category}: ${share.toFixed(0)} percent of budget`}><span style={{ width: `${share}%` }} /></div>
+                            <div className="expense-meter" role="progressbar" aria-label={`${item.category}: ${share.toFixed(0)} percent of budget`} aria-valuenow={Math.round(share)} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${share}%` }} /></div>
                           </div>
                           <div className="expense-amount"><strong>{money(item.estimated_amount, plan.event.currency)}</strong><small>estimate</small></div>
                           <label className="quote-status"><span className="sr-only">Quotation status for {item.item}</span><select value={item.status} disabled={isPending(`status:${item.id}`)} onChange={(e) => void saveExpenseStatus(item.id, e.target.value as Expense['status'])}><option value="estimated">Estimated</option><option value="quoted">Quoted</option><option value="confirmed">Confirmed</option></select></label>
