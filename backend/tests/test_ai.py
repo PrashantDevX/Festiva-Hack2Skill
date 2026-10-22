@@ -412,6 +412,18 @@ def test_interactions_sdk_status_code_errors_are_mapped_without_leaking_details(
     assert ai._map_api_error(RuntimeError("not an API error")) is None
 
 
+def test_unhandled_provider_status_is_not_marked_transient():
+    class InteractionError(Exception):
+        status_code = 402
+        headers = {}
+
+    mapped = ai._map_api_error(InteractionError())
+
+    assert mapped is not None
+    assert mapped.category == "provider_error"
+    assert mapped.transient is False
+
+
 def test_interactions_sdk_400_is_not_retried_and_is_safely_reported(monkeypatch, live_env):
     calls = []
 

@@ -369,8 +369,75 @@ def _map_api_error(error: Exception) -> AIServiceError | None:
     return AIServiceError(
         "Gemini could not complete the request. Retry shortly.",
         category="provider_error",
-        transient=isinstance(code, int) and 500 <= code < 600,
     )
+
+
+def _map_provider_exception(exc: Exception) -> AIServiceError:
+    mapped = _map_api_error(exc)
+    if mapped is not None:
+        return mapped
+    try:
+        import httpx
+    except ImportError:
+        httpx = None  # type: ignore[assignment]
+    if httpx is not None and isinstance(
+        exc, (httpx.TimeoutException, httpx.TransportError)
+    ):
+        return AIServiceError(
+            "Gemini timed out or could not be reached. Saved plans remain available.",
+            category="timeout",
+            transient=True,
+        )
+    if isinstance(exc, (TimeoutError, OSError)):
+        return AIServiceError(
+            "Gemini timed out or could not be reached. Saved plans remain available.",
+            category="timeout",
+            transient=True,
+        )
+    return AIServiceError(
+        "Gemini could not complete the request. Retry shortly.",
+        category="provider_error",
+    )
+
+
+def _record_provider_success(
+    model: str,
+    started: float,
+    interaction: Any,
+    retry_count: int,
+) -> str:
+    latency_ms = round((time.perf_counter() - started) * 1000)
+    text = getattr(interaction, "output_text", None)
+    usage = getattr(interaction, "usage", None)
+    input_tokens = getattr(usage, "total_input_tokens", None)
+    output_tokens = getattr(usage, "total_output_tokens", None)
+    thought_tokens = getattr(usage, "total_thought_tokens", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    metrics.record_ai_request(
+        model=model,
+        latency_ms=latency_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        thought_tokens=thought_tokens,
+        total_tokens=total_tokens,
+    )
+    logger.info(
+        "Gemini response model=%s latency_ms=%d input_tokens=%s output_tokens=%s "
+        "thought_tokens=%s retries=%d",
+        model,
+        latency_ms,
+        input_tokens if input_tokens is not None else "unavailable",
+        output_tokens if output_tokens is not None else "unavailable",
+        thought_tokens if thought_tokens is not None else "unavailable",
+        retry_count,
+    )
+    if not isinstance(text, str) or not text.strip():
+        raise AIServiceError(
+            "Gemini returned an empty response. Retry.",
+            category="empty_output",
+            http_status=502,
+        )
+    return text
 
 
 def _single_provider_call(
@@ -400,67 +467,12 @@ def _single_provider_call(
             },
             store=False,
         )
-        latency_ms = round((time.perf_counter() - started) * 1000)
-        text = getattr(interaction, "output_text", None)
-        usage = getattr(interaction, "usage", None)
-        input_tokens = getattr(usage, "total_input_tokens", None)
-        output_tokens = getattr(usage, "total_output_tokens", None)
-        thought_tokens = getattr(usage, "total_thought_tokens", None)
-        total_tokens = getattr(usage, "total_tokens", None)
-        metrics.record_ai_request(
-            model=model,
-            latency_ms=latency_ms,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            thought_tokens=thought_tokens,
-            total_tokens=total_tokens,
-        )
-        logger.info(
-            "Gemini response model=%s latency_ms=%d input_tokens=%s output_tokens=%s "
-            "thought_tokens=%s retries=%d",
-            model,
-            latency_ms,
-            input_tokens if input_tokens is not None else "unavailable",
-            output_tokens if output_tokens is not None else "unavailable",
-            thought_tokens if thought_tokens is not None else "unavailable",
-            retry_count,
-        )
-        if not isinstance(text, str) or not text.strip():
-            raise AIServiceError(
-                "Gemini returned an empty response. Retry.",
-                category="empty_output",
-                http_status=502,
-            )
-        return text
+        return _record_provider_success(model, started, interaction, retry_count)
     except AIServiceError:
         raise
-    except Exception as exc:  # mapped below without exposing provider internals
+    except Exception as exc:  # mapped without exposing provider internals
         latency_ms = round((time.perf_counter() - started) * 1000)
-        mapped = _map_api_error(exc)
-        if mapped is None:
-            try:
-                import httpx
-            except ImportError:
-                httpx = None  # type: ignore[assignment]
-            if httpx is not None and isinstance(
-                exc, (httpx.TimeoutException, httpx.TransportError)
-            ):
-                mapped = AIServiceError(
-                    "Gemini timed out or could not be reached. Saved plans remain available.",
-                    category="timeout",
-                    transient=True,
-                )
-            elif isinstance(exc, (TimeoutError, OSError)):
-                mapped = AIServiceError(
-                    "Gemini timed out or could not be reached. Saved plans remain available.",
-                    category="timeout",
-                    transient=True,
-                )
-            else:
-                mapped = AIServiceError(
-                    "Gemini could not complete the request. Retry shortly.",
-                    category="provider_error",
-                )
+        mapped = _map_provider_exception(exc)
         metrics.record_ai_request(
             model=model,
             latency_ms=latency_ms,
@@ -665,12 +677,7 @@ def _compact_plan(plan: Plan) -> dict[str, Any]:
                     "completed": vendor.completed,
                 }
                 for vendor in plan.vendors
-                if vendor.vendor_name
-                or vendor.contact
-                or vendor.quotation is not None
-                or vendor.notes
-                or vendor.completed
-                or vendor.status != "to_research"
+                if vendor.has_user_state()
             ],
             "actual_expenses": [
                 {
@@ -680,7 +687,7 @@ def _compact_plan(plan: Plan) -> dict[str, Any]:
                     "status": item.status,
                 }
                 for item in plan.expenses
-                if item.actual_amount is not None or item.status != "estimated"
+                if item.has_user_state()
             ],
         },
     }

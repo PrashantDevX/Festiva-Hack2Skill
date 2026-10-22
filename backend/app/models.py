@@ -49,6 +49,10 @@ class Expense(StrictModel):
     status: Literal["estimated", "quoted", "confirmed"] = "estimated"
     note: str = Field(default="", max_length=300)
 
+    def has_user_state(self) -> bool:
+        """Whether the user has recorded spend or a quotation decision."""
+        return self.actual_amount is not None or self.status != "estimated"
+
 
 class PrepTask(StrictModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -74,6 +78,17 @@ class Vendor(StrictModel):
     status: Literal["to_research", "contacted", "quoted", "booked"] = "to_research"
     completed: bool = False
     notes: str = Field(default="", max_length=500)
+
+    def has_user_state(self) -> bool:
+        """Whether the user has researched or booked this vendor category."""
+        return bool(
+            self.vendor_name
+            or self.contact
+            or self.quotation is not None
+            or self.notes
+            or self.completed
+            or self.status != "to_research"
+        )
 
 
 class Idea(StrictModel):
@@ -324,10 +339,6 @@ class VendorUpdate(StrictModel):
 class ExpenseUpdate(StrictModel):
     actual_amount: float | None = Field(default=None, ge=0, le=100000000)
     status: Literal["estimated", "quoted", "confirmed"] | None = None
-
-
-class PlanRecord(StrictModel):
-    plan: Plan
 
 
 def utc_now() -> datetime:

@@ -36,6 +36,11 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+MISSING_DATE_QUESTION = (
+    "What date do you have in mind? Preparation deadlines depend on the event date."
+)
+
+
 def normalize_generated_content(content: PlanContent, event: EventInput) -> PlanContent:
     """Remove model-authored user state and enforce deterministic planning rules.
 
@@ -70,9 +75,7 @@ def normalize_generated_content(content: PlanContent, event: EventInput) -> Plan
     if event.event_date is None and not any(
         "date" in question.lower() for question in questions
     ):
-        questions.append(
-            "What date do you have in mind? Preparation deadlines depend on the event date."
-        )
+        questions.append(MISSING_DATE_QUESTION)
     return content.model_copy(
         update={
             "expenses": expenses,
@@ -86,47 +89,40 @@ def normalize_generated_content(content: PlanContent, event: EventInput) -> Plan
     )
 
 
-def merge_user_state(existing: Plan, generated: PlanContent) -> PlanContent:
-    """Preserve user decisions when a live model revises the plan.
-
-    Model output is untrusted. The model may rephrase titles, so matching uses a
-    normalized title plus a conservative similarity score. Unmatched items keep
-    their generated defaults and therefore never inherit another item's state.
-    """
-    old_tasks = list(existing.prep_tasks)
-    used_task_ids: set[str] = set()
-    merged_tasks: list[PrepTask] = []
-    for task in generated.prep_tasks:
+def _merge_tasks(existing: list[PrepTask], generated: list[PrepTask]) -> list[PrepTask]:
+    used_ids: set[str] = set()
+    merged: list[PrepTask] = []
+    for task in generated:
         match = next(
             (
                 old
-                for old in old_tasks
-                if old.id not in used_task_ids and _similar(old.title, task.title)
+                for old in existing
+                if old.id not in used_ids and _similar(old.title, task.title)
             ),
             None,
         )
-        if match is not None:
-            used_task_ids.add(match.id)
-            merged_tasks.append(
-                task.model_copy(update={"id": match.id, "completed": match.completed})
-            )
-        else:
-            merged_tasks.append(task)
+        if match is None:
+            merged.append(task)
+            continue
+        used_ids.add(match.id)
+        merged.append(
+            task.model_copy(update={"id": match.id, "completed": match.completed})
+        )
 
-    for old in old_tasks:
-        if old.id not in used_task_ids and old.completed:
-            # A model that drops a completed task must not erase the user's work.
-            merged_tasks.append(old)
+    # A model that drops a completed task must not erase the user's work.
+    merged.extend(old for old in existing if old.id not in used_ids and old.completed)
+    return merged
 
-    old_vendors = list(existing.vendors)
-    used_vendor_ids: set[str] = set()
-    merged_vendors: list[Vendor] = []
-    for vendor in generated.vendors:
+
+def _merge_vendors(existing: list[Vendor], generated: list[Vendor]) -> list[Vendor]:
+    used_ids: set[str] = set()
+    merged: list[Vendor] = []
+    for vendor in generated:
         exact = next(
             (
                 old
-                for old in old_vendors
-                if old.id not in used_vendor_ids
+                for old in existing
+                if old.id not in used_ids
                 and _normalize(old.category) == _normalize(vendor.category)
             ),
             None,
@@ -134,92 +130,94 @@ def merge_user_state(existing: Plan, generated: PlanContent) -> PlanContent:
         match = exact or next(
             (
                 old
-                for old in old_vendors
-                if old.id not in used_vendor_ids
+                for old in existing
+                if old.id not in used_ids
                 and _similar(old.category, vendor.category, threshold=0.8)
             ),
             None,
         )
-        if match is not None:
-            used_vendor_ids.add(match.id)
-            merged_vendors.append(
-                vendor.model_copy(
-                    update={
-                        "id": match.id,
-                        "vendor_name": match.vendor_name,
-                        "contact": match.contact,
-                        "quotation": match.quotation,
-                        "status": match.status,
-                        "completed": match.completed,
-                        "notes": match.notes,
-                    }
-                )
+        if match is None:
+            merged.append(vendor)
+            continue
+        used_ids.add(match.id)
+        merged.append(
+            vendor.model_copy(
+                update={
+                    "id": match.id,
+                    "vendor_name": match.vendor_name,
+                    "contact": match.contact,
+                    "quotation": match.quotation,
+                    "status": match.status,
+                    "completed": match.completed,
+                    "notes": match.notes,
+                }
             )
-        else:
-            merged_vendors.append(vendor)
+        )
 
-    for old in old_vendors:
-        if old.id not in used_vendor_ids and (
-            old.vendor_name
-            or old.contact
-            or old.quotation is not None
-            or old.notes
-            or old.completed
-            or old.status != "to_research"
-        ):
-            # Preserve researched vendor details even if the model changed the
-            # category wording enough to miss similarity matching.
-            merged_vendors.append(old)
+    # Preserve researched vendor details even if the model changed the category
+    # wording enough to miss similarity matching.
+    merged.extend(
+        old for old in existing if old.id not in used_ids and old.has_user_state()
+    )
+    return merged
 
-    old_expenses = list(existing.expenses)
-    used_expense_ids: set[str] = set()
-    merged_expenses: list[Expense] = []
-    for expense in generated.expenses:
+
+def _merge_expenses(existing: list[Expense], generated: list[Expense]) -> list[Expense]:
+    used_ids: set[str] = set()
+    merged: list[Expense] = []
+    for expense in generated:
         exact = next(
             (
                 old
-                for old in old_expenses
-                if old.id not in used_expense_ids
+                for old in existing
+                if old.id not in used_ids
                 and _similar(old.item, expense.item)
                 and _similar(old.category, expense.category, threshold=0.8)
             ),
             None,
         )
-        category_match = exact or next(
+        match = exact or next(
             (
                 old
-                for old in old_expenses
-                if old.id not in used_expense_ids
+                for old in existing
+                if old.id not in used_ids
                 and _similar(old.category, expense.category, threshold=0.8)
             ),
             None,
         )
-        if category_match is not None:
-            used_expense_ids.add(category_match.id)
-            merged_expenses.append(
-                expense.model_copy(
-                    update={
-                        "id": category_match.id,
-                        "actual_amount": category_match.actual_amount,
-                        "status": category_match.status,
-                    }
-                )
+        if match is None:
+            merged.append(expense)
+            continue
+        used_ids.add(match.id)
+        merged.append(
+            expense.model_copy(
+                update={
+                    "id": match.id,
+                    "actual_amount": match.actual_amount,
+                    "status": match.status,
+                }
             )
-        else:
-            merged_expenses.append(expense)
+        )
 
-    for old in old_expenses:
-        if old.id not in used_expense_ids and (
-            old.actual_amount is not None or old.status != "estimated"
-        ):
-            # Actual spend and quotation status are user-owned records.
-            merged_expenses.append(old)
+    # Actual spend and quotation status are user-owned records.
+    merged.extend(
+        old for old in existing if old.id not in used_ids and old.has_user_state()
+    )
+    return merged
 
+
+def merge_user_state(existing: Plan, generated: PlanContent) -> PlanContent:
+    """Preserve user decisions when a live model revises the plan.
+
+    Model output is untrusted. The model may rephrase titles, so matching uses a
+    normalized title plus a conservative similarity score. Unmatched items keep
+    their generated defaults and therefore never inherit another item's state.
+    """
     return generated.model_copy(
         update={
-            "prep_tasks": merged_tasks,
-            "vendors": merged_vendors,
-            "expenses": merged_expenses,
+            "prep_tasks": _merge_tasks(existing.prep_tasks, generated.prep_tasks),
+            "vendors": _merge_vendors(existing.vendors, generated.vendors),
+            "expenses": _merge_expenses(existing.expenses, generated.expenses),
         }
     )
 
@@ -302,8 +300,7 @@ def finalize_plan(
     )
 
 
-def demo_content(event: EventInput) -> PlanContent:
-    """Create a transparent, deterministic demo plan from the submitted event."""
+def _demo_expenses(event: EventInput) -> list[dict[str, object]]:
     allocations = [
         ("Venue", "Venue and setup", 0.20),
         ("Food", "Food and refreshments", 0.35),
@@ -312,7 +309,7 @@ def demo_content(event: EventInput) -> PlanContent:
         ("Entertainment", "Music, activities, and hosting", 0.08),
         ("Other", "Invitations, transport, and contingency", 0.13),
     ]
-    expenses = []
+    expenses: list[dict[str, object]] = []
     running = 0.0
     for index, (category, item, share) in enumerate(allocations):
         amount = (
@@ -329,7 +326,10 @@ def demo_content(event: EventInput) -> PlanContent:
                 "note": "Planning estimate; request a real quotation.",
             }
         )
+    return expenses
 
+
+def _demo_themes(event: EventInput) -> list[str]:
     preferred_style = event.preferences.strip()
     event_name = event.event_type.lower()
     themes = [
@@ -340,7 +340,11 @@ def demo_content(event: EventInput) -> PlanContent:
     ]
     if event.dietary_needs:
         themes.append("Inclusive table with clearly labelled dietary options")
+    return themes
 
+
+def _demo_assumptions(event: EventInput) -> list[str]:
+    preferred_style = event.preferences.strip()
     assumptions = [
         "All amounts are planning estimates, not quotations or confirmations.",
         "Vendor checklist entries are categories to research, not verified businesses.",
@@ -355,15 +359,21 @@ def demo_content(event: EventInput) -> PlanContent:
         assumptions.append(
             f"Special requirements recorded: {event.special_requirements[:250]}."
         )
+    return assumptions
 
+
+def _demo_questions(event: EventInput) -> list[str]:
     questions: list[str] = []
     if event.event_date is None:
-        questions.append(
-            "What date do you have in mind? Preparation deadlines depend on the event date."
-        )
+        questions.append(MISSING_DATE_QUESTION)
     if not event.dietary_needs:
         questions.append("Do any guests have dietary needs or allergies to plan for?")
+    return questions
 
+
+def demo_content(event: EventInput) -> PlanContent:
+    """Create a transparent, deterministic demo plan from the submitted event."""
+    event_name = event.event_type.lower()
     date_phrase = (
         f" on {event.event_date.isoformat()}" if event.event_date else " on a date to be decided"
     )
@@ -375,9 +385,9 @@ def demo_content(event: EventInput) -> PlanContent:
             "The plan prioritizes guest comfort, clear next steps, and written quotes "
             "before any commitment."
         ),
-        clarifying_questions=questions[:8],
-        theme_options=themes[:5],
-        expenses=expenses,
+        clarifying_questions=_demo_questions(event)[:8],
+        theme_options=_demo_themes(event)[:5],
+        expenses=_demo_expenses(event),
         prep_tasks=[
             {"title": "Confirm venue capacity, accessibility, and included setup", "priority": "high"},
             {"title": "Shortlist caterers and request written quotes for the guest count", "priority": "high"},
@@ -433,7 +443,7 @@ def demo_content(event: EventInput) -> PlanContent:
             "Keep a contingency line and confirm taxes, delivery, and setup fees.",
             "Reuse or rent statement decor instead of buying single-use items.",
         ],
-        assumptions=assumptions[:8],
+        assumptions=_demo_assumptions(event)[:8],
     )
 
 

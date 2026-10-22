@@ -41,6 +41,19 @@ export type Vendor = {
   notes: string
 }
 
+export type ScheduleItem = {
+  time: string
+  title: string
+  detail: string
+}
+
+export type Idea = {
+  title: string
+  description: string
+  rationale: string
+  estimated_impact: string
+}
+
 export type Plan = {
   id: string
   created_at: string
@@ -51,9 +64,9 @@ export type Plan = {
   theme_options: string[]
   expenses: Expense[]
   prep_tasks: PrepTask[]
-  schedule: { time: string; title: string; detail: string }[]
+  schedule: ScheduleItem[]
   vendors: Vendor[]
-  ideas: { title: string; description: string; rationale: string; estimated_impact: string }[]
+  ideas: Idea[]
   savings: string[]
   assumptions: string[]
   estimated_total: number
@@ -65,9 +78,24 @@ export type Plan = {
 }
 
 export type Health = {
-  status: string
+  status: 'ok' | 'degraded'
   ai_mode: 'demo' | 'live' | 'invalid'
-  provider: string
-  model: string | null
   provider_configured: boolean
+}
+
+/** Editable fields accepted by the vendor PATCH endpoint. */
+export type VendorUpdate = Partial<
+  Pick<Vendor, 'completed' | 'vendor_name' | 'contact' | 'quotation' | 'status' | 'notes'>
+>
+
+/** Editable fields accepted by the expense PATCH endpoint. */
+export type ExpenseUpdate = Partial<Pick<Expense, 'actual_amount' | 'status'>>
+
+/** Local form state for a vendor row; quotation stays a string while editing. */
+export type VendorDraft = {
+  vendor_name: string
+  contact: string
+  quotation: string
+  status: Vendor['status']
+  notes: string
 }

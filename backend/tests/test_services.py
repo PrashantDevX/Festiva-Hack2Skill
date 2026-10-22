@@ -190,6 +190,47 @@ def test_merge_keeps_user_owned_items_the_model_drops(valid_event):
     )
 
 
+def test_merge_keeps_notes_only_vendor_and_status_only_expense(valid_event):
+    event = EventInput.model_validate(valid_event)
+    original = finalize_plan(demo_content(event), event, "demo")
+    original = original.model_copy(
+        update={
+            "vendors": [
+                original.vendors[0].model_copy(
+                    update={"notes": "Ask about the accessible entrance.", "status": "contacted"}
+                ),
+                *original.vendors[1:],
+            ],
+            "expenses": [
+                original.expenses[0].model_copy(update={"status": "quoted"}),
+                *original.expenses[1:],
+            ],
+        }
+    )
+    generated = normalize_generated_content(demo_content(event), event)
+    generated = generated.model_copy(
+        update={
+            "vendors": generated.vendors[1:],
+            "expenses": generated.expenses[1:],
+        }
+    )
+
+    merged = merge_user_state(original, generated)
+
+    assert any(
+        vendor.id == original.vendors[0].id
+        and vendor.notes == "Ask about the accessible entrance."
+        and vendor.status == "contacted"
+        for vendor in merged.vendors
+    )
+    assert any(
+        expense.id == original.expenses[0].id
+        and expense.status == "quoted"
+        and expense.actual_amount is None
+        for expense in merged.expenses
+    )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [("guest_count", 0), ("budget", 0), ("currency", "rupees"), ("description", "short")],

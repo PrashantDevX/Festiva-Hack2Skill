@@ -1,4 +1,4 @@
-import type { EventInput, Health, Plan, Vendor } from './types'
+import type { EventInput, ExpenseUpdate, Health, Plan, VendorUpdate } from './types'
 
 export class ApiError extends Error {
   readonly status: number
@@ -84,16 +84,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ completed }),
     }),
-  updateVendor: (planId: string, vendorId: string, changes: Partial<Vendor>) =>
+  updateVendor: (planId: string, vendorId: string, changes: VendorUpdate) =>
     request<Plan>(`/api/plans/${planId}/vendors/${vendorId}`, {
       method: 'PATCH',
       body: JSON.stringify(changes),
     }),
-  updateExpense: (
-    planId: string,
-    expenseId: string,
-    changes: { actual_amount?: number | null; status?: 'estimated' | 'quoted' | 'confirmed' },
-  ) =>
+  updateExpense: (planId: string, expenseId: string, changes: ExpenseUpdate) =>
     request<Plan>(`/api/plans/${planId}/expenses/${expenseId}`, {
       method: 'PATCH',
       body: JSON.stringify(changes),

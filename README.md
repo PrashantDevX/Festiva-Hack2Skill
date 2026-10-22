@@ -74,7 +74,7 @@ The official pricing page checked on 2026-10-22 lists standard **Free Tier** inp
 
 | Requirement / metric | Implementation | Evidence |
 |---|---|---|
-| Event creation, missing-date clarification, personalization | `frontend/src/App.tsx`, `backend/app/main.py`, `backend/app/ai.py` | API workflow tests; form validation tests |
+| Event creation, missing-date clarification, personalization | `frontend/src/App.tsx`, `frontend/src/components/CreatePlanView.tsx`, `backend/app/main.py`, `backend/app/ai.py` | API workflow tests; form validation tests |
 | GenAI planning and revision | `backend/app/ai.py` | Official Gemini SDK path; mocked live-mode tests plus successful live generation/revision runs |
 | Independently calculated budget | `backend/app/services.py` | Unit tests for totals, remaining balance, actual spend, overruns |
 | Event-date-aware preparation | `backend/app/services.py` | Timeline ordering, missing-date, and past-date tests |
@@ -84,7 +84,7 @@ The official pricing page checked on 2026-10-22 lists standard **Free Tier** inp
 | Preserve user decisions on revision | `backend/app/services.py`, `backend/app/ai.py` | Unit tests for completed tasks, vendor details, actual spend, date, currency |
 | Safe AI failures | `backend/app/ai.py`, `backend/app/main.py` | Tests for missing key, bad model, 429, timeout, malformed output |
 | Efficient AI usage | `backend/app/ai.py`, `backend/app/cache.py` | TTL cache, single-flight lock, bounded retries, token metrics |
-| Accessible, responsive workspace | `frontend/src/App.tsx`, `frontend/src/style.css`, `frontend/e2e/accessibility.spec.ts` | Axe WCAG 2.2 AA checks, 4.5:1 contrast palette, skip link, focus styles, responsive/keyboard tests |
+| Accessible, responsive workspace | `frontend/src/App.tsx`, `frontend/src/components/PlanWorkspace.tsx`, `frontend/src/style.css`, `frontend/e2e/accessibility.spec.ts` | Axe WCAG 2.2 AA checks, 4.5:1 contrast palette, skip link, focus styles, responsive/keyboard tests |
 | Security and reliability | `backend/app/auth.py`, `backend/app/ai.py`, `backend/app/main.py` | Server-only key, signed sessions, owner scoping, CSRF-origin checks, input bounds, body limit, rate limits, strict validation, safe errors |
 
 ## Requirements
@@ -232,11 +232,11 @@ npm --prefix frontend audit --audit-level=moderate
 
 The E2E suite starts an isolated demo-mode API and Vite server, exercises the browser workflow, verifies JSON export, and runs Axe WCAG checks plus keyboard/responsive checks. The test API forces a temporary SQLite database and clears Blob/Vercel credentials so it cannot touch production storage. A global teardown removes the temporary database. It prefers `.venv` Python and falls back to `python`; override with `FESTIVA_PYTHON` if needed. Ports 8000 and 5173 must be free.
 
-### Latest local verification (2026-10-22)
+### Latest local verification (2026-10-23)
 
 | Check | Result |
 |---|---|
-| `python -m pytest -q` | **55 passed** |
+| `python -m pytest -q` | **57 passed** |
 | `npm --prefix frontend run build` | **passed** (TypeScript check + Vite production bundle) |
 | `npm --prefix frontend run test:e2e` | **3 passed** in Microsoft Edge against isolated demo API/database |
 | Axe WCAG 2.2 A/AA (`@axe-core/playwright`) | **0 violations** on welcome, form, and generated plan views |
@@ -284,7 +284,7 @@ This local run went through the actual HTTP API and the Vercel entrypoint (`POST
 
 This run made exactly one live create and one live revision. It created plan `08fc64122de04cca801378aa5cce651e` and did not delete it. The pre-auth verification plan remains untouched in the same Blob store but is not exposed to any anonymous session. Token usage for this run was not aggregated because the serverless instance that answered diagnostics had restarted; the local measured run above reports token usage.
 
-The full workflow above was verified on `dpl_2zLsnNazFe1rbYaexvLLMKqmmRzo`. The final redeploy (`dpl_BYVC3VyJR2N9erQrivTR1HseitLN`) changed only SQLite-only owner-takeover hardening, origin normalization, and documentation, so the Blob path and UI were unchanged. A post-redeploy smoke test without any Gemini call confirmed: health `ok`/`live`/`gemini-3.5-flash-lite`, auth configured, private Blob backend, CSP and `no-store`, a new session sees an empty list, cross-session read and write return `404`, cross-origin mutation returns `403`, and the browser console is clean.
+The full workflow above was verified on `dpl_2zLsnNazFe1rbYaexvLLMKqmmRzo`. Later redeploys changed only SQLite-only owner-takeover hardening, origin normalization, documentation, and UI copy removal of provider/model labels; the Blob/API path and workflow behavior were unchanged. Post-redeploy smoke tests without any Gemini call confirmed: health `ok`/`live`/`gemini-3.5-flash-lite`, auth configured, private Blob backend, CSP/HSTS and `no-store`, a new session sees an empty list, cross-session read and write return `404`, cross-origin mutation returns `403`, the browser console is clean, and the visible UI contains no Gemini/model/provider labels.
 
 The production URL is live; the metrics above are from requests made against it. Quota limits and verified-vendor data are not claimed. The key is stored as a Vercel **Sensitive** environment variable and is not printed or committed.
 
@@ -306,7 +306,7 @@ The script forces live mode, makes one real structured generation (and optionall
 **Published on Vercel (production):**
 
 - Stable alias: <https://festiva-ai.vercel.app>
-- Latest deployment: <https://festiva-37fd47og5-prashant-singhs-projects-4b5930a2.vercel.app> (`dpl_BYVC3VyJR2N9erQrivTR1HseitLN`)
+- Latest deployment: <https://festiva-kdrphcuss-prashant-singhs-projects-4b5930a2.vercel.app> (`dpl_9TAeCiTngidDFKFNbxNwCELdLSLm`)
 - Vercel project: `prashant-singhs-projects-4b5930a2/festiva-ai`
 - Production environment variables are stored in Vercel; `GEMINI_API_KEY`, `BLOB_READ_WRITE_TOKEN`, and `FESTIVA_SESSION_SECRET` are marked **Sensitive** and are not in the repository.
 - Build used Python 3.13, installed runtime dependencies with `uv`, built the Vite bundle, and completed successfully.
@@ -376,12 +376,13 @@ The generation cache, rate-limit counters, and write locks remain process-local;
 - `backend/app/auth.py` — HMAC-SHA256 anonymous sessions, expiry/tamper checks, production fail-closed configuration.
 - `backend/app/database.py` — owner-scoped SQLite and durable private Vercel Blob storage; owner-column migration; plan count and backend reporting.
 - `backend/__init__.py` — package marker for the Vercel entrypoint.
-- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py`, `test_security.py` — updated/expanded coverage (55 tests), including cross-user isolation, tampered cookies, origin rejection, fail-closed secret handling, short-secret rejection, and SQLite owner-takeover prevention.
+- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py`, `test_security.py` — updated/expanded coverage (57 tests), including cross-user isolation, tampered cookies, origin rejection, fail-closed secret handling, short-secret rejection, SQLite owner-takeover prevention, and notes-only vendor/status-only expense preservation.
 - `backend/scripts/verify_gemini.py` — operator live-verification script; `--model` override.
 - `backend/requirements.txt` — added `google-genai` and `vercel-blob`.
 - `main.py`, `requirements.txt`, `vercel.json`, `.python-version`, `.vercelignore` — Vercel entrypoint, runtime dependencies, build/function configuration, Python pin, upload exclusions.
 - `.env.example`, `pytest.ini`, `.gitignore` — configuration and test-root support, including `FESTIVA_SESSION_SECRET`.
-- `frontend/src/types.ts`, `api.ts`, `App.tsx`, `style.css` — Gemini labels, request timeout/error metadata, duplicate-request guards, sequential session bootstrap, accessible progress bars, WCAG contrast palette, and accessibility/readability improvements.
+- `frontend/src/App.tsx`, `components/*`, `aiStatus.ts`, `format.ts`, `vendorDraft.ts` — split the former monolithic view into typed, presentational components; centralized AI-readiness labels, formatting, error extraction, and vendor-draft helpers.
+- `frontend/src/types.ts`, `api.ts`, `style.css` — tightened API update payload types and health status, preserved request timeout/error metadata, duplicate-request guards, sequential session bootstrap, accessible progress bars, and WCAG contrast palette.
 - `frontend/index.html`, `frontend/public/favicon.svg` — page metadata and favicon.
 - `frontend/playwright.config.ts` — deterministic single-worker E2E, virtualenv Python preference, and test session secret.
 - `frontend/e2e/planning-workflow.spec.ts`, `accessibility.spec.ts`, `global-teardown.ts` — workflow/export verification, Axe WCAG audit, keyboard/responsive checks, and database cleanup.

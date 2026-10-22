@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs'
 test('creates, tracks, revises, and persists an event plan', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Plan your celebration' }).click()
+  await expect(page.locator('.ai-indicator')).toHaveText('Demo mode')
+  await expect(page.locator('.form-actions')).toContainText('Demo mode is active.')
   await page.getByLabel(/Describe your event/).fill(
     'A warm anniversary evening with gentle music and vegetarian food for friends and family.',
   )

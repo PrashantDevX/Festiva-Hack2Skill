@@ -196,6 +196,10 @@ def _is_plan_path(path: str) -> bool:
     return path == "/api/plans" or path.startswith("/api/plans/")
 
 
+def _forwarded_proto(request: Request) -> str:
+    return request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+
+
 def _origin_is_allowed(request: Request, origin: str) -> bool:
     normalized = origin.rstrip("/")
     if normalized in origins:
@@ -203,23 +207,14 @@ def _origin_is_allowed(request: Request, origin: str) -> bool:
     host = request.headers.get("host", "").strip()
     if not host:
         return False
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    scheme = (
-        forwarded_proto.split(",")[0].strip()
-        if forwarded_proto
-        else request.url.scheme
-    )
+    scheme = _forwarded_proto(request) or request.url.scheme
     return normalized == f"{scheme}://{host}"
 
 
 def _request_is_https(request: Request) -> bool:
     if os.getenv("VERCEL"):
         return True
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    return (
-        request.url.scheme == "https"
-        or forwarded_proto.split(",")[0].strip() == "https"
-    )
+    return request.url.scheme == "https" or _forwarded_proto(request) == "https"
 
 
 def _harden_response(response, path: str):
