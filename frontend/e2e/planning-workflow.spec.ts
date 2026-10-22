@@ -65,3 +65,36 @@ test('creates, tracks, revises, and persists an event plan', async ({ page }) =>
     status: 'quoted',
   })
 })
+
+test('changing plans clears the previous revision draft', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Plan your celebration' }).click()
+  await page.getByLabel(/Describe your event/).fill(
+    'A relaxed birthday lunch with family, local food, and a simple garden setting.',
+  )
+  await page.getByLabel(/Celebration type/).selectOption('Birthday')
+  await page.getByLabel(/Location/).fill('Pune')
+  await page.locator('input[type="number"]').nth(0).fill('30')
+  await page.locator('input[type="number"]').nth(1).fill('15000')
+  await page.getByRole('button', { name: /Create my plan/ }).click()
+  await expect(page.getByRole('heading', { name: 'Birthday.' })).toBeVisible()
+
+  await page.locator('#revision').fill('Make this plan simpler')
+  await page.getByRole('button', { name: 'New event' }).click()
+  await page.getByLabel(/Describe your event/).fill(
+    'A warm anniversary dinner with close friends, gentle music, and vegetarian food.',
+  )
+  await page.getByLabel(/Celebration type/).selectOption('Anniversary')
+  await page.getByLabel(/Location/).fill('Mysuru')
+  await page.locator('input[type="number"]').nth(0).fill('20')
+  await page.locator('input[type="number"]').nth(1).fill('10000')
+  await page.getByRole('button', { name: /Create my plan/ }).click()
+
+  await expect(page.getByRole('heading', { name: 'Anniversary.' })).toBeVisible()
+  await expect(page.locator('#revision')).toHaveValue('')
+
+  await page.locator('#revision').fill('Switch draft')
+  await page.getByRole('button', { name: /Birthday/ }).click()
+  await expect(page.getByRole('heading', { name: 'Birthday.' })).toBeVisible()
+  await expect(page.locator('#revision')).toHaveValue('')
+})

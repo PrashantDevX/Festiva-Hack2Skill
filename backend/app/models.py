@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -305,7 +305,7 @@ class Plan(PlanContent):
     ai_mode: Literal["live", "demo"]
 
     def content(self) -> PlanContent:
-        """Return only the model-generated content, excluding user-owned state."""
+        """Return content fields, excluding app metadata and computed totals."""
         return PlanContent.model_validate(
             {key: getattr(self, key) for key in PlanContent.model_fields}
         )
@@ -335,10 +335,32 @@ class VendorUpdate(StrictModel):
     status: Literal["to_research", "contacted", "quoted", "booked"] | None = None
     notes: str | None = Field(default=None, max_length=500)
 
+    @field_validator(
+        "completed", "vendor_name", "contact", "status", "notes", mode="before"
+    )
+    @classmethod
+    def reject_null_fields(cls, value: Any) -> Any:
+        """Reject explicit nulls for fields that cannot be cleared.
+
+        ``quotation`` is intentionally excluded because null clears a quotation.
+        Field defaults are not validated, so omitted fields remain valid.
+        """
+        if value is None:
+            raise ValueError("This field cannot be null.")
+        return value
+
 
 class ExpenseUpdate(StrictModel):
     actual_amount: float | None = Field(default=None, ge=0, le=100000000)
     status: Literal["estimated", "quoted", "confirmed"] | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def reject_null_status(cls, value: Any) -> Any:
+        """Allow actual_amount to be cleared, but never the quotation status."""
+        if value is None:
+            raise ValueError("Status cannot be null.")
+        return value
 
 
 def utc_now() -> datetime:

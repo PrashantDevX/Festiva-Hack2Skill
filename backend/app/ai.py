@@ -8,7 +8,8 @@ import random
 import re
 import threading
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -30,6 +31,7 @@ from .services import (
 
 logger = logging.getLogger(__name__)
 ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
+ResultModel = TypeVar("ResultModel")
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 PROMPT_VERSION = "2026-10-21.1"
@@ -63,7 +65,7 @@ _REVISE_SYSTEM_PROMPT = (
 )
 
 _live_lock = threading.Lock()
-_generation_cache: TTLCache | None = None
+_generation_cache: TTLCache[PlanContent] | None = None
 
 
 class AIServiceError(Exception):
@@ -174,7 +176,7 @@ def _cache_ttl_seconds() -> float:
     return max(0.0, min(value, 86400.0))
 
 
-def _get_cache() -> TTLCache:
+def _get_cache() -> TTLCache[PlanContent]:
     global _generation_cache
     if _generation_cache is None:
         _generation_cache = TTLCache(max_entries=32, ttl_seconds=_cache_ttl_seconds())
@@ -532,8 +534,8 @@ def _validate_provider_output(
     user_prompt: str,
     schema: dict[str, Any],
     failure_message: str,
-    transform: Callable[[ResponseModel], Any],
-) -> Any:
+    transform: Callable[[ResponseModel], ResultModel],
+) -> ResultModel:
     """Validate provider JSON and the application-level content conversion.
 
     The transform also runs on the retry, so whitespace-only strings or other

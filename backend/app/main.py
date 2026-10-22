@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import logging
@@ -7,7 +8,7 @@ import time
 from threading import Lock
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -28,7 +29,6 @@ from .models import (
     EventInput,
     ExpenseUpdate,
     Plan,
-    PlanContent,
     RevisionRequest,
     VendorUpdate,
 )
@@ -217,7 +217,7 @@ def _request_is_https(request: Request) -> bool:
     return request.url.scheme == "https" or _forwarded_proto(request) == "https"
 
 
-def _harden_response(response, path: str):
+def _harden_response(response: Response, path: str) -> Response:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault(
@@ -383,7 +383,9 @@ def revise_plan(plan_id: str, request: RevisionRequest, http_request: Request):
         return database.save_plan(plan, owner_id)
 
 
-def _update_plan(plan_id: str, owner_id: str, update_content) -> Plan:
+def _update_plan(
+    plan_id: str, owner_id: str, update_content: Callable[[Plan], Plan]
+) -> Plan:
     with _plan_write_lock:
         plan = database.get_plan(plan_id, owner_id)
         if plan is None:
@@ -418,10 +420,7 @@ def update_vendor(
     def apply(plan: Plan) -> Plan:
         if not any(vendor.id == vendor_id for vendor in plan.vendors):
             raise HTTPException(status_code=404, detail="Vendor checklist item not found.")
-        changes = {
-            field: getattr(update, field)
-            for field in update.model_fields_set
-        }
+        changes = update.model_dump(exclude_unset=True)
         if not changes:
             raise HTTPException(status_code=422, detail="Provide a vendor field to update.")
         vendors = [
@@ -442,32 +441,16 @@ def update_expense(
     def apply(plan: Plan) -> Plan:
         if not any(item.id == expense_id for item in plan.expenses):
             raise HTTPException(status_code=404, detail="Expense not found.")
-        changes: dict[str, object] = {}
-        if "actual_amount" in update.model_fields_set:
-            changes["actual_amount"] = update.actual_amount
-        if update.status is not None:
-            changes["status"] = update.status
+        changes = update.model_dump(exclude_unset=True)
         if not changes:
             raise HTTPException(status_code=422, detail="Provide an expense field to update.")
         expenses = [
-            item.model_copy(
-                update=changes
-            )
+            item.model_copy(update=changes)
             if item.id == expense_id
             else item
             for item in plan.expenses
         ]
-        content = PlanContent(
-            overview=plan.overview,
-            theme_options=plan.theme_options,
-            expenses=expenses,
-            prep_tasks=plan.prep_tasks,
-            schedule=plan.schedule,
-            vendors=plan.vendors,
-            ideas=plan.ideas,
-            savings=plan.savings,
-            assumptions=plan.assumptions,
-        )
+        content = plan.content().model_copy(update={"expenses": expenses})
         return finalize_plan(content, plan.event, plan.ai_mode, existing=plan)
 
     return _update_plan(plan_id, _require_owner(request), apply)

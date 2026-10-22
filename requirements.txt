@@ -1,6 +1,6 @@
 # Vercel installs runtime dependencies from this file.
-# Keep in sync with backend/requirements.txt; development-only packages
-# (pytest) are intentionally omitted here.
+# Local development uses backend/requirements.txt, which includes this file
+# and adds development-only packages (pytest, uvicorn).
 fastapi>=0.115,<1
 pydantic>=2.8,<3
 python-dotenv>=1,<2

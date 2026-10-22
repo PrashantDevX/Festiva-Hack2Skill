@@ -4,16 +4,18 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
 
 
 @dataclass
-class _Entry:
-    value: Any
+class _Entry(Generic[T]):
+    value: T
     expires_at: float
 
 
-class TTLCache:
+class TTLCache(Generic[T]):
     """Small in-process TTL cache for completed AI generations.
 
     This is intentionally not a shared cache. It reduces repeated free-tier
@@ -24,10 +26,10 @@ class TTLCache:
     def __init__(self, max_entries: int = 32, ttl_seconds: float = 3600) -> None:
         self.max_entries = max(1, max_entries)
         self.ttl_seconds = max(0, ttl_seconds)
-        self._entries: OrderedDict[str, _Entry] = OrderedDict()
+        self._entries: OrderedDict[str, _Entry[T]] = OrderedDict()
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str) -> T | None:
         if self.ttl_seconds <= 0:
             return None
         now = time.monotonic()
@@ -41,7 +43,7 @@ class TTLCache:
             self._entries.move_to_end(key)
             return entry.value
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: T) -> None:
         if self.ttl_seconds <= 0:
             return
         now = time.monotonic()

@@ -13,8 +13,8 @@ export function Topbar({ showCreate, plan, health }: TopbarProps) {
   return (
     <header className="topbar">
       <div className="breadcrumb">Your workspace <span>/</span> {showCreate ? 'New event' : plan?.event.event_type ?? 'Overview'}</div>
-      <div className={`ai-indicator ${readiness === 'live' ? 'live' : ''}`}>
-        <span className="status-dot" />
+      <div className={`ai-indicator ${readiness === 'live' ? 'live' : ''}`} role="status">
+        <span className="status-dot" aria-hidden="true" />
         {getAiStatusLabel(readiness)}
       </div>
     </header>

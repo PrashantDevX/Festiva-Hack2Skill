@@ -227,7 +227,7 @@ function BudgetCard({
             </div>
             <div className="expense-amount"><strong>{formatMoney(item.estimated_amount, plan.event.currency)}</strong><small>estimate</small></div>
             <label className="quote-status"><span className="sr-only">Quotation status for {item.item}</span><select value={item.status} disabled={isPending(`status:${item.id}`)} onChange={(e) => onStatusChange(item.id, e.target.value as Expense['status'])}><option value="estimated">Estimated</option><option value="quoted">Quoted</option><option value="confirmed">Confirmed</option></select></label>
-            <label className="actual-input"><span className="sr-only">Actual spending for {item.item}</span><input type="number" min="0" step="1" placeholder="Actual" value={expenseDrafts[item.id] ?? (item.actual_amount === null ? '' : String(item.actual_amount))} onChange={(e) => onDraftChange(item.id, e.target.value)} /><button aria-label={`Save actual spending for ${item.item}`} disabled={isPending(`expense:${item.id}`)} onClick={() => onSaveActual(item.id)}>Save</button></label>
+            <div className="actual-input"><input aria-label={`Actual spending for ${item.item}`} type="number" min="0" step="1" placeholder="Actual" value={expenseDrafts[item.id] ?? (item.actual_amount === null ? '' : String(item.actual_amount))} onChange={(e) => onDraftChange(item.id, e.target.value)} /><button aria-label={`Save actual spending for ${item.item}`} disabled={isPending(`expense:${item.id}`)} onClick={() => onSaveActual(item.id)}>Save</button></div>
           </div>
         )
       })}

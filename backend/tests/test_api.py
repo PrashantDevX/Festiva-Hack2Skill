@@ -46,6 +46,73 @@ def test_generation_persistence_checklists_and_expenses(client, valid_event):
     assert len(listed.json()) == 1
 
 
+def test_expense_update_preserves_clarifying_questions(client, valid_event):
+    event = {**valid_event, "event_date": None, "dietary_needs": ""}
+    created = client.post("/api/plans", json=event)
+    assert created.status_code == 201
+    plan = created.json()
+    assert plan["clarifying_questions"]
+    expense = plan["expenses"][0]
+
+    updated = client.patch(
+        f"/api/plans/{plan['id']}/expenses/{expense['id']}",
+        json={"actual_amount": 825},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["clarifying_questions"] == plan["clarifying_questions"]
+
+    status_updated = client.patch(
+        f"/api/plans/{plan['id']}/expenses/{expense['id']}",
+        json={"status": "quoted"},
+    )
+    assert status_updated.status_code == 200
+    assert status_updated.json()["clarifying_questions"] == plan["clarifying_questions"]
+
+    rejected = client.patch(
+        f"/api/plans/{plan['id']}/expenses/{expense['id']}",
+        json={"status": None},
+    )
+    assert rejected.status_code == 422
+
+    retrieved = client.get(f"/api/plans/{plan['id']}")
+    assert retrieved.status_code == 200
+    assert retrieved.json()["clarifying_questions"] == plan["clarifying_questions"]
+
+
+def test_vendor_update_rejects_explicit_nulls_without_corrupting_plan(
+    client, valid_event
+):
+    created = client.post("/api/plans", json=valid_event).json()
+    plan_id = created["id"]
+    vendor = created["vendors"][0]
+    original = client.get(f"/api/plans/{plan_id}").json()["vendors"][0]
+
+    for field in ("completed", "vendor_name", "contact", "status", "notes"):
+        response = client.patch(
+            f"/api/plans/{plan_id}/vendors/{vendor['id']}",
+            json={field: None},
+        )
+        assert response.status_code == 422, field
+
+    after = client.get(f"/api/plans/{plan_id}")
+    assert after.status_code == 200
+    assert after.json()["vendors"][0] == original
+
+    quoted = client.patch(
+        f"/api/plans/{plan_id}/vendors/{vendor['id']}",
+        json={"quotation": 12500},
+    )
+    assert quoted.status_code == 200
+    assert quoted.json()["vendors"][0]["quotation"] == 12500
+
+    cleared = client.patch(
+        f"/api/plans/{plan_id}/vendors/{vendor['id']}",
+        json={"quotation": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["vendors"][0]["quotation"] is None
+
+
 def test_natural_language_revision_preserves_checklist_progress(client, valid_event):
     created = client.post("/api/plans", json=valid_event).json()
     plan_id = created["id"]

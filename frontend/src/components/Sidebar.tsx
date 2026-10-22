@@ -20,7 +20,12 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <a className="brand" href="#home" aria-label="Festiva AI home">
+      <a
+        className="brand"
+        href="#main-content"
+        aria-label="Festiva AI workspace"
+        onClick={onShowWorkspace}
+      >
         <span className="brand-mark"><Flower2 size={21} strokeWidth={1.8} /></span>
         <span>festiva<span className="brand-ai">.ai</span></span>
       </a>

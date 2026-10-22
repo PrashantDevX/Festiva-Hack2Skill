@@ -38,6 +38,7 @@ function App() {
   const [vendorDrafts, setVendorDrafts] = useState<Record<string, VendorDraft>>({})
   const pendingRef = useRef<Set<string>>(new Set())
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set())
+  const mainRef = useRef<HTMLElement | null>(null)
 
   const beginRequest = (key: string) => {
     if (pendingRef.current.has(key)) return false
@@ -52,6 +53,14 @@ function App() {
   }
 
   const isPending = (key: string) => pendingKeys.has(key)
+
+  const focusMain = () => mainRef.current?.focus()
+
+  const resetPlanEditorState = () => {
+    setRevision('')
+    setExpenseDrafts({})
+    setVendorDrafts({})
+  }
 
   const refreshPlans = async (selected?: string) => {
     const saved = await api.listPlans()
@@ -111,7 +120,9 @@ function App() {
       const saved = await api.createPlan({ ...event, event_date: event.event_date || null })
       setPlan(saved)
       setEvent(saved.event)
+      resetPlanEditorState()
       setShowCreate(false)
+      focusMain()
       await refreshQuietly(saved.id)
       setNotice(saved.ai_mode === 'demo' ? 'Demo plan saved. No live AI provider was used.' : 'Your new plan is ready and saved.')
     } catch (reason) {
@@ -259,6 +270,8 @@ function App() {
       setPlan(selected)
       setEvent(selected.event)
       setShowCreate(false)
+      resetPlanEditorState()
+      focusMain()
     } catch (reason) {
       setError(getErrorMessage(reason, 'Could not open this saved plan.'))
     } finally {
@@ -277,11 +290,17 @@ function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  const showWorkspace = () => {
+    setShowCreate(false)
+    focusMain()
+  }
+
   const startNewPlan = () => {
     setEvent(initialEvent)
     setShowCreate(true)
     setError('')
     setNotice('')
+    focusMain()
   }
 
   const showError = (message: string) => <p className="alert error" role="alert">{message}</p>
@@ -293,12 +312,12 @@ function App() {
         plans={plans}
         selectedPlanId={plan?.id ?? null}
         showCreate={showCreate}
-        onShowWorkspace={() => setShowCreate(false)}
+        onShowWorkspace={showWorkspace}
         onStartNewPlan={startNewPlan}
         onSelectPlan={(id) => void selectPlan(id)}
       />
 
-      <main className="main-area" id="main-content" tabIndex={-1}>
+      <main className="main-area" id="main-content" tabIndex={-1} ref={mainRef}>
         <Topbar showCreate={showCreate} plan={plan} health={health} />
 
         <div className="content-wrap">
@@ -315,7 +334,7 @@ function App() {
               loading={loading}
               onChange={updateEvent}
               onSubmit={createPlan}
-              onBack={() => setShowCreate(false)}
+              onBack={showWorkspace}
             />
           ) : plan ? (
             <PlanWorkspace

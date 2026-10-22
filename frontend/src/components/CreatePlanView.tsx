@@ -71,15 +71,15 @@ export function CreatePlanView({
         </div>
         <div className="form-section-heading budget-heading"><span>02</span><div><h2>Make it work for you</h2><p>Budgets are estimates until you confirm real quotations.</p></div></div>
         <div className="form-grid">
-          <label className="field">
-            <span>Total budget <b>*</b></span>
+          <div className="field">
+            <span id="budget-label">Total budget <b>*</b></span>
             <div className="input-combo">
               <select aria-label="Currency" value={event.currency} onChange={(e) => onChange('currency', e.target.value)}>
                 <option value="INR">INR ₹</option><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="GBP">GBP £</option>
               </select>
-              <input required type="number" min="1" step="1" max="100000000" value={event.budget} onChange={(e) => onChange('budget', Number(e.target.value))} />
+              <input aria-labelledby="budget-label" required type="number" min="1" step="1" max="100000000" value={event.budget} onChange={(e) => onChange('budget', Number(e.target.value))} />
             </div>
-          </label>
+          </div>
           <label className="field">
             <span>Food & dietary needs</span>
             <input maxLength={500} value={event.dietary_needs} onChange={(e) => onChange('dietary_needs', e.target.value)} placeholder="e.g. vegetarian, nut-free options" />

@@ -205,9 +205,10 @@ The official pricing page checked on 2026-10-22 lists standard **Free Tier** inp
 ## Accessibility
 
 - Skip-to-content link and a focusable main landmark; the E2E suite asserts the skip link is first in tab order and moves focus to the main landmark.
+- Focus moves to the main landmark after creating, opening, or leaving a plan, so keyboard and screen-reader users are not dropped back onto `body`.
 - Visible `:focus-visible` outlines for buttons, inputs, textareas, selects, and links.
-- Semantic form labels, `aria-label`s for icon-only controls, and screen-reader-only names for dense budget controls.
-- `role="status"` announcements for generation/revision progress and saved notices; `role="alert"` for errors.
+- Semantic form labels and explicit accessible names for the budget and actual-spend controls; icon-only buttons have `aria-label`s and the decorative welcome illustration has an image role.
+- `role="status"` announcements for AI readiness, generation/revision progress, and saved notices; `role="alert"` for errors.
 - `aria-current="page"` on the selected saved plan, `aria-busy` on in-flight forms, and accessible progress bars for budget shares.
 - A text summary of budget totals for screen-reader users.
 - Responsive layouts, larger body text, and reduced-motion support. E2E checks at 375px, 768px, and 1280px found no horizontal overflow.
@@ -236,11 +237,11 @@ The E2E suite starts an isolated demo-mode API and Vite server, exercises the br
 
 | Check | Result |
 |---|---|
-| `python -m pytest -q` | **57 passed** |
+| `python -m pytest -q` | **59 passed** |
 | `npm --prefix frontend run build` | **passed** (TypeScript check + Vite production bundle) |
-| `npm --prefix frontend run test:e2e` | **3 passed** in Microsoft Edge against isolated demo API/database |
+| `npm --prefix frontend run test:e2e` | **4 passed** in Microsoft Edge against isolated demo API/database |
 | Axe WCAG 2.2 A/AA (`@axe-core/playwright`) | **0 violations** on welcome, form, and generated plan views |
-| Keyboard/responsive E2E | Skip link focused and moved to `#main-content`; no horizontal overflow at 375, 768, or 1280px |
+| Keyboard/focus/responsive E2E | Skip link and post-navigation focus move to `#main-content`; budget and actual-spend controls expose the intended names; no horizontal overflow at 375, 768, or 1280px |
 | JSON export E2E | Downloaded `festiva-anniversary-*.json` and verified revised budget and actual spend |
 | `npm --prefix frontend audit --audit-level=moderate` | **0 vulnerabilities** |
 | Live Gemini generation + revision (`gemini-3.5-flash-lite`) | **2/2 succeeded**; see the measured usage below |
@@ -376,9 +377,9 @@ The generation cache, rate-limit counters, and write locks remain process-local;
 - `backend/app/auth.py` — HMAC-SHA256 anonymous sessions, expiry/tamper checks, production fail-closed configuration.
 - `backend/app/database.py` — owner-scoped SQLite and durable private Vercel Blob storage; owner-column migration; plan count and backend reporting.
 - `backend/__init__.py` — package marker for the Vercel entrypoint.
-- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py`, `test_security.py` — updated/expanded coverage (57 tests), including cross-user isolation, tampered cookies, origin rejection, fail-closed secret handling, short-secret rejection, SQLite owner-takeover prevention, and notes-only vendor/status-only expense preservation.
+- `backend/tests/conftest.py`, `test_ai.py`, `test_api.py`, `test_services.py`, `test_database.py`, `test_security.py` — updated/expanded coverage (59 tests), including cross-user isolation, tampered cookies, origin rejection, fail-closed secret handling, short-secret rejection, SQLite owner-takeover prevention, preserved clarifying questions after expense updates, rejected null vendor fields, and notes-only vendor/status-only expense preservation.
 - `backend/scripts/verify_gemini.py` — operator live-verification script; `--model` override.
-- `backend/requirements.txt` — added `google-genai` and `vercel-blob`.
+- `backend/requirements.txt` — includes the shared root runtime requirements and adds local-only `uvicorn` and `pytest`, avoiding a second runtime dependency list.
 - `main.py`, `requirements.txt`, `vercel.json`, `.python-version`, `.vercelignore` — Vercel entrypoint, runtime dependencies, build/function configuration, Python pin, upload exclusions.
 - `.env.example`, `pytest.ini`, `.gitignore` — configuration and test-root support, including `FESTIVA_SESSION_SECRET`.
 - `frontend/src/App.tsx`, `components/*`, `aiStatus.ts`, `format.ts`, `vendorDraft.ts` — split the former monolithic view into typed, presentational components; centralized AI-readiness labels, formatting, error extraction, and vendor-draft helpers.
@@ -386,7 +387,7 @@ The generation cache, rate-limit counters, and write locks remain process-local;
 - `frontend/index.html`, `frontend/public/favicon.svg` — page metadata and favicon.
 - `frontend/playwright.config.ts` — deterministic single-worker E2E, virtualenv Python preference, and test session secret.
 - `frontend/e2e/planning-workflow.spec.ts`, `accessibility.spec.ts`, `global-teardown.ts` — workflow/export verification, Axe WCAG audit, keyboard/responsive checks, and database cleanup.
-- `frontend/package.json`, `package-lock.json` — added `@axe-core/playwright`.
+- `frontend/package.json`, `package-lock.json` — moved Vite build tooling to `devDependencies`; added `@axe-core/playwright`.
 - `README.md` — this document.
 
 ## Remaining gaps and next steps

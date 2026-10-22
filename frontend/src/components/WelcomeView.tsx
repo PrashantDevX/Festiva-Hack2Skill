@@ -19,7 +19,7 @@ export function WelcomeView({ health, onStartNewPlan }: WelcomeViewProps) {
         <button className="primary-button welcome-button" onClick={onStartNewPlan}>Plan your celebration <ArrowRight size={17} /></button>
         <div className="welcome-trust"><span><Check size={14} /> Budget-aware</span><span><Check size={14} /> Made personal</span><span><Check size={14} /> Yours to refine</span></div>
       </div>
-      <div className="welcome-art" aria-label="Illustration of a celebration invitation and flowers">
+      <div className="welcome-art" role="img" aria-label="Illustration of a celebration invitation and flowers">
         <div className="art-sun" />
         <div className="art-leaf leaf-one" /><div className="art-leaf leaf-two" /><div className="art-leaf leaf-three" />
         <div className="art-card"><span>LET'S CELEBRATE</span><Heart size={31} /><strong>your<br />kind of<br />wonderful</strong><i>made with meaning</i></div>
